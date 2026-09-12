@@ -37,7 +37,9 @@ def download_full_dataset() -> str:
 
 
 def extract_if_needed(local_dir: str) -> str:
-    """Extracts the dataset zip(s) if not already extracted."""
+    """Extracts the dataset zip(s) if not already extracted, then deletes
+    the zip files — once extracted, they're just dead weight taking up
+    disk space we don't have room for at full 101-class scale."""
     extracted_marker = os.path.join(local_dir, "_extracted")
     if os.path.exists(extracted_marker):
         return local_dir
@@ -48,6 +50,8 @@ def extract_if_needed(local_dir: str) -> str:
             print(f"Extracting {name} ...")
             with zipfile.ZipFile(zip_path, "r") as zf:
                 zf.extractall(local_dir)
+            os.remove(zip_path)  # reclaim disk space immediately
+            print(f"  Deleted {name} after extraction to free disk space.")
 
     open(extracted_marker, "w").close()
     return local_dir
@@ -125,7 +129,21 @@ def build_subset(root: str, classes: list) -> None:
             dst_folder = os.path.join(DATA_DIR, split_name, class_name)
             os.makedirs(dst_folder, exist_ok=True)
             for v in split_videos:
-                shutil.copy(os.path.join(src_folder, v), os.path.join(dst_folder, v))
+                src_path = os.path.join(src_folder, v)
+                dst_path = os.path.join(dst_folder, v)
+                if os.path.lexists(dst_path):
+                    os.remove(dst_path)
+                # Symlink instead of copy: at full 101-class scale, copying
+                # duplicates nearly the entire dataset's disk footprint a
+                # second time, which is what caused "No space left on
+                # device" on Kaggle/Colab. A symlink costs ~0 bytes and
+                # cv2.VideoCapture reads through it transparently.
+                try:
+                    os.symlink(os.path.abspath(src_path), dst_path)
+                except OSError:
+                    # Some filesystems (rare, e.g. certain network mounts)
+                    # don't support symlinks — fall back to a real copy.
+                    shutil.copy(src_path, dst_path)
 
         class_distribution[class_name] = {"train": len(train_videos), "test": len(test_videos)}
         print(f"{class_name}: {len(train_videos)} train / {len(test_videos)} test clips")
