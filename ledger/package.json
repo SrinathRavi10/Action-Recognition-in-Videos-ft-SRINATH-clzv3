@@ -1,0 +1,11 @@
+{
+  "name": "paisa-ledger",
+  "version": "1.0.0",
+  "description": "Offline-first expense tracker: bank statement analyser, subscription tracker and tax helper.",
+  "type": "module",
+  "scripts": {
+    "start": "python3 serve.py",
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "MIT"
+}
