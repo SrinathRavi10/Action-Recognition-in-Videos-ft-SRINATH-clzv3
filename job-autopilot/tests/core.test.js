@@ -84,7 +84,7 @@ test('matching: sensible apply / skip decisions with reasons', async () => {
   const restore = stubFetch({ '/v1/boards/acme/jobs': fx('greenhouse'), '/v0/postings/acme': fx('lever'), '/posting-api/job-board/acme': fx('ashby') });
   try {
     const profile = { ...emptyProfile(), ...parseResume(resumeText, { now: NOW }), experienceYears: 1 };
-    const settings = { ...DEFAULT_SETTINGS(), locations: ['Pune', 'Bengaluru', 'Hyderabad'] };
+    const settings = { ...DEFAULT_SETTINGS(), locations: ['Pune', 'Bengaluru', 'Hyderabad'], maxAgeDays: 36500 };
     const jobs = [...await src.greenhouse('acme', {}), ...await src.lever('acme', {}), ...await src.ashby('acme', {})];
     const byTitle = Object.fromEntries(jobs.map((j) => [j.title, evaluate(j, profile, settings)]));
     assert.equal(byTitle['Machine Learning Engineer'].decision, 'apply');

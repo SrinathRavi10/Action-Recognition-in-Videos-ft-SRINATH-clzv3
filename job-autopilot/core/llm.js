@@ -1,6 +1,7 @@
 // Optional Claude help: answering screening questions and writing a cover letter, strictly grounded in the resume.
 // Everything the model receives from outside (the job text, the form) is treated as untrusted data.
 import Anthropic from '@anthropic-ai/sdk';
+import { skillsIn } from './match.js';
 
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 
@@ -68,4 +69,37 @@ export function templateCoverLetter(p, job) {
   const skills = (p.skills || []).slice(0, 6).join(', ');
   const role = p.currentTitle ? `${p.currentTitle}${p.currentCompany ? ` at ${p.currentCompany}` : ''}` : (p.headline || 'engineer');
   return `Hello ${job.company || 'hiring'} team,\n\nI am applying for the ${job.title} position. I am currently working as ${role}${p.experienceYears ? ` with about ${p.experienceYears} year${p.experienceYears === 1 ? '' : 's'} of hands-on experience` : ''}, and my work includes ${skills || 'machine learning and data projects'}.\n\nThe role looks like a strong match for my background and I would welcome the chance to discuss it. My resume is attached.\n\nThank you,\n${p.fullName || `${p.firstName} ${p.lastName}`}`;
+}
+
+/** Interview preparation brief for one application (Claude if configured, otherwise a deterministic checklist). */
+export async function interviewPrep({ client, settings, profile, job }) {
+  if (client) {
+    const user = `<resume>\n${clip(profile.resumeText, 9000)}\n</resume>\n<profile>\n${profileFacts(profile)}\n</profile>\n<job_description title="${clip(job.title, 120)}" company="${clip(job.company, 80)}">\n${clip(job.description, 4000)}\n</job_description>\nWrite an interview preparation brief in Markdown with these sections: "What the role needs" (4 bullets), "Where you are strong" (only skills/projects that appear in the resume), "Gaps to revise" (skills in the job description that are not in the resume), "Likely questions" (8, mixing technical and behavioural, with a one-line hint each), "Questions to ask them" (4). Keep it under 450 words.`;
+    try { const t = (await call(client, settings, { system: SYSTEM, user, maxTokens: 2200 })).trim(); if (t) return { text: t, source: 'claude' }; } catch { /* fall through to the checklist */ }
+  }
+  return { text: templatePrep(profile, job), source: 'template' };
+}
+
+export function templatePrep(profile, job) {
+  const need = skillsIn(`${job.title}\n${job.description || ''}`);
+  const mine = new Set(profile.skills || []);
+  const strong = need.filter((s) => mine.has(s)), gaps = need.filter((s) => !mine.has(s));
+  const list = (a, none) => (a.length ? a.map((x) => `- ${x}`).join('\n') : `- ${none}`);
+  return `## What the role needs
+${list(need.slice(0, 8), 'The posting does not list specific skills – re-read it before the call.')}
+
+## Where you are strong
+${list(strong, 'Revisit your resume projects and pick two you can explain end to end.')}
+
+## Gaps to revise
+${list(gaps.slice(0, 6), 'No obvious gaps against the posting.')}
+
+## Likely questions
+${[...strong.slice(0, 4).map((s) => `- Tell me about a project where you used ${s}. What did you decide and why?`), '- Walk me through your most challenging project from problem to result.', '- How do you evaluate a model / solution and know it is good enough?', '- Tell me about a time something you built failed – what did you do?', `- Why ${job.company}, and why this role?`].join('\n')}
+
+## Questions to ask them
+- What would success look like in the first 90 days?
+- What does the team's tech stack and review process look like?
+- How are projects prioritised and how is ML work taken to production?
+- What are the next steps and timeline?`;
 }

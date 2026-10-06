@@ -8,6 +8,7 @@ const BASES = {
   lever: 'https://api.lever.co',
   ashby: 'https://api.ashbyhq.com',
   workable: 'https://apply.workable.com',
+  smartrecruiters: 'https://api.smartrecruiters.com',
   remoteok: 'https://remoteok.com',
   remotive: 'https://remotive.com',
   adzuna: 'https://api.adzuna.com',
@@ -53,7 +54,23 @@ export async function workable(token, settings) {
   });
 }
 
-export const ATS_SOURCES = { greenhouse, lever, ashby, workable };
+export async function smartrecruiters(token, settings) {
+  const out = [];
+  for (let offset = 0; offset < 300; offset += 100) {
+    const j = await getJson(`${base(settings, 'smartrecruiters')}/v1/companies/${encodeURIComponent(token)}/postings?limit=100&offset=${offset}&country=in`);
+    for (const x of j.content || []) {
+      const l = x.location || {};
+      const loc = l.fullLocation || [l.city, l.region, (l.country || '').toUpperCase()].filter(Boolean).join(', ');
+      const url = `https://jobs.smartrecruiters.com/${encodeURIComponent(token)}/${x.id}`;
+      out.push({ id: `smartrecruiters:${token}:${x.id}`, source: 'smartrecruiters', ats: 'smartrecruiters', token, company: x.company?.name || slugName(token), title: x.name || '', location: loc, locations: [], remote: l.remote === true,
+        department: x.department?.label || '', url, applyUrl: url, description: [x.function?.label, x.industry?.label, x.typeOfEmployment?.label, x.experienceLevel?.label].filter(Boolean).join(' · '), postedAt: iso(x.releasedDate), manual: true });
+    }
+    if (!(j.content || []).length || offset + 100 >= (j.totalFound || 0)) break;
+  }
+  return out;
+}
+
+export const ATS_SOURCES = { greenhouse, lever, ashby, workable, smartrecruiters };
 
 // ───────── aggregators (search) ─────────
 export async function remoteok(settings) {

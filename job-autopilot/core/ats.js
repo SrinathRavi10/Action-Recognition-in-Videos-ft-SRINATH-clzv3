@@ -20,3 +20,5 @@ export function detectAts(url) {
 
 /** Which systems the form filler is able to submit on. */
 export const SUPPORTED_ATS = ['greenhouse', 'lever', 'ashby', 'workable'];
+/** Systems we can read listings from (or recognise) but cannot fill: the app finds the job, you apply with one click. */
+export const MANUAL_ATS = ['smartrecruiters', 'workday'];

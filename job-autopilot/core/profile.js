@@ -17,6 +17,10 @@ export const DEFAULT_SETTINGS = () => ({
     'computer vision', 'deep learning', 'applied ai', 'data analyst', 'automation engineer', 'rpa', 'python developer', 'data engineer', 'mlops',
   ],
   excludeTitleWords: ['senior', 'sr.', 'sr ', 'lead', 'principal', 'staff', 'manager', 'director', 'head of', 'architect', 'vp ', 'chief', 'president', 'distinguished'],
+  approval: false,             // live mode: ask me before each application (queue them under "Approvals")
+  maxAgeDays: 45,              // ignore postings older than this (usually stale / ghost listings)
+  followUpDays: 7,             // suggest a follow-up if nobody has replied after this many days
+  notifyManual: true,          // tell me about good matches on sites the app cannot fill itself
   delaySeconds: [25, 70],      // pause between applications (looks human, avoids hammering sites)
   activeHours: { from: 0, to: 24 },
   startWithWindows: true,
@@ -24,7 +28,8 @@ export const DEFAULT_SETTINGS = () => ({
   claude: { enabled: false, apiKey: '', model: 'claude-opus-5-5' },
   email: { enabled: false, host: 'smtp.gmail.com', port: 465, user: '', pass: '' },
   adzuna: { appId: '', appKey: '' },
-  sources: { greenhouse: true, lever: true, ashby: true, workable: true, remoteok: true, remotive: true, adzuna: false },
+  inbox: { enabled: false, host: 'imap.gmail.com', port: 993, user: '', pass: '' },
+  sources: { greenhouse: true, lever: true, ashby: true, workable: true, smartrecruiters: true, remoteok: true, remotive: true, adzuna: false },
   sourceBase: {},              // test/override base URLs
 });
 

@@ -1,6 +1,8 @@
 // Eligibility + scoring: should this job be applied to, and why?
 import { norm } from './util.js';
 import { SKILLS } from './resume.js';
+import { compareSalary, fmtLpa, ageDays } from './quality.js';
+import { adjust } from './learn.js';
 
 const INDIA_CITIES = ['india', 'chennai', 'bengaluru', 'bangalore', 'hyderabad', 'pune', 'mumbai', 'navi mumbai', 'delhi', 'new delhi', 'gurgaon', 'gurugram', 'noida', 'ghaziabad', 'kochi', 'cochin', 'coimbatore', 'kolkata', 'ahmedabad', 'jaipur', 'chandigarh', 'trivandrum', 'thiruvananthapuram', 'madurai', 'mysuru', 'mysore', 'indore', 'nagpur', 'vadodara', 'bhubaneswar', 'mohali', 'lucknow', 'remote - india', 'india remote'];
 const NOT_INDIA = ['united states', 'usa', ' us ', 'u.s.', 'canada', 'united kingdom', ' uk ', 'germany', 'france', 'netherlands', 'ireland', 'spain', 'poland', 'australia', 'singapore', 'dubai', 'uae', 'brazil', 'mexico', 'israel', 'japan', 'emea', 'europe', 'latam', 'north america', 'new york', 'san francisco', 'london', 'berlin', 'toronto'];
@@ -43,7 +45,7 @@ export function skillsIn(text) { const t = String(text || ''); return skillRegex
 /**
  * @returns {{score:number, decision:'apply'|'maybe'|'skip', reasons:string[], skipReason?:string, matchedSkills:string[]}}
  */
-export function evaluate(job, profile, settings) {
+export function evaluate(job, profile, settings, learn = null) {
   const reasons = [];
   const title = norm(job.title);
   const desc = String(job.description || '');
@@ -54,6 +56,9 @@ export function evaluate(job, profile, settings) {
   if (bad) return skip(`Seniority/level excluded (“${bad.trim()}”)`);
   if (/\bintern(ship)?\b|\btrainee\b/.test(title) && !settings.includeInternships) return skip('Internship (turned off in settings)');
   if (OFF_TOPIC.some((w) => ` ${title} `.includes(` ${w}`))) return skip('Not a technical role');
+
+  const age = ageDays(job);
+  if (age != null && age > (settings.maxAgeDays ?? 45)) return skip(`Posted ${Math.round(age)} days ago – probably stale`);
 
   // 2) role relevance
   let role = 0, roleWhy = '';
@@ -100,7 +105,16 @@ export function evaluate(job, profile, settings) {
   let fresh = 0;
   if (job.postedAt) { const days = (Date.now() - new Date(job.postedAt).getTime()) / 864e5; if (days <= 3) fresh = 5; else if (days <= 14) fresh = 3; else if (days > 60) fresh = -6; }
 
-  const score = Math.max(0, Math.min(100, Math.round(role + exp + where + skillPts + fresh)));
+  // 7) pay vs what you expect, and what the user taught us by approving / rejecting similar jobs
+  let pay = 0;
+  const cmp = compareSalary(job, profile.answers?.expectedCtc);
+  if (cmp.known && cmp.verdict === 'below') { pay = -8; reasons.push(`Pays ${fmtLpa(cmp.range.min)}–${fmtLpa(cmp.range.max)} – below your expectation`); }
+  else if (cmp.known && cmp.verdict === 'meets') { pay = 2; reasons.push(`Pays ${fmtLpa(cmp.range.min)}–${fmtLpa(cmp.range.max)} – meets your expectation`); }
+  else if (cmp.known) reasons.push(`Pays ${fmtLpa(cmp.range.min)}–${fmtLpa(cmp.range.max)}`);
+  const lr = adjust(learn, job);
+  if (lr.why) reasons.push(lr.why);
+
+  const score = Math.max(0, Math.min(100, Math.round(role + exp + where + skillPts + fresh + pay + lr.points)));
   const decision = score >= (settings.minScore ?? 62) ? 'apply' : score >= (settings.minScore ?? 62) - 14 ? 'maybe' : 'skip';
   return { score, decision, reasons, matchedSkills: matched, skipReason: decision === 'skip' ? 'Score below your threshold' : undefined };
 }
