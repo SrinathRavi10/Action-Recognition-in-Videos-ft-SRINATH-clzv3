@@ -37,7 +37,30 @@ export const CATEGORIES = {
 export const SPEND_CATS = Object.keys(CATEGORIES).filter((c) => CATEGORIES[c].group === 'spend');
 export const ALL_CATS = Object.keys(CATEGORIES);
 export const groupOf = (cat) => CATEGORIES[cat]?.group ?? 'spend';
-export const colorOf = (cat) => CATEGORIES[cat]?.color ?? '#adb5bd';
+
+/**
+ * Colour follows the *family*, not the rank: 6 hues from the validated categorical palette + neutral for "Other".
+ * Individual categories inside a family share its hue (they are told apart by name, not colour).
+ */
+export const FAMILIES = {
+  home: { name: 'Home & bills', slot: 1, cats: ['Rent & Housing', 'Bills & Utilities', 'Mobile & Internet', 'EMI & Loans'] },
+  food: { name: 'Food & groceries', slot: 2, cats: ['Food & Dining', 'Groceries'] },
+  move: { name: 'Travel & transport', slot: 3, cats: ['Transport', 'Travel'] },
+  shop: { name: 'Shopping & lifestyle', slot: 4, cats: ['Shopping', 'Personal Care', 'Gifts & Donations'] },
+  fun: { name: 'Subscriptions & fun', slot: 5, cats: ['Subscriptions', 'Entertainment'] },
+  care: { name: 'Health & learning', slot: 7, cats: ['Health', 'Insurance', 'Education'] },
+  other: { name: 'Other', slot: 0, cats: ['Cash Withdrawal', 'Fees & Charges', 'Tax', 'Uncategorized'] },
+  save: { name: 'Saved & invested', slot: 6, cats: ['Investments'] },
+  xfer: { name: 'Transfers', slot: 0, cats: ['Credit Card Bill', 'Transfers'] },
+  income: { name: 'Income', slot: 6, cats: ['Salary', 'Interest', 'Dividends', 'Refunds & Cashback', 'Investment Returns', 'Other Income'] },
+};
+const FAMILY_OF = {};
+for (const [k, f] of Object.entries(FAMILIES)) for (const c of f.cats) FAMILY_OF[c] = k;
+export const familyOf = (cat) => FAMILY_OF[cat] || 'other';
+export const SPEND_FAMILIES = ['home', 'food', 'move', 'shop', 'fun', 'care', 'other'];
+export const familyColor = (fam) => `var(--s${FAMILIES[fam]?.slot ?? 0})`;
+export const colorOf = (cat) => familyColor(familyOf(cat));
+
 
 // Order matters: first match wins.
 const DEBIT_RULES = [
@@ -109,14 +132,25 @@ export function merchantKey(desc) {
 
 export const displayMerchant = (key) => titleCase(key);
 
+/** Test a user keyword rule against an upper-cased narration. `/regex/` is supported; otherwise plain substring. */
+export function ruleMatches(pattern, up) {
+  const p = String(pattern || '').trim();
+  if (!p) return false;
+  const m = p.match(/^\/(.+)\/([a-z]*)$/);
+  if (m) { try { return new RegExp(m[1], m[2].includes('i') ? m[2] : m[2] + 'i').test(up); } catch { return false; } }
+  return up.includes(p.toUpperCase());
+}
+
 /**
- * Categorise one transaction. `userRules` maps merchant key -> category (learned from the user's own edits)
- * and always wins over the built-in rules.
+ * Categorise one transaction. Priority: merchant rules learned from the user's edits → the user's keyword rules →
+ * built-in rules. `aliases` maps one merchant key onto another ("SWIGGY INSTAMART" → "SWIGGY").
  */
-export function categorize({ desc, type }, userRules = {}) {
-  const key = merchantKey(desc);
+export function categorize({ desc, type }, userRules = {}, { custom = [], aliases = {} } = {}) {
+  let key = merchantKey(desc);
+  if (aliases[key]) key = aliases[key];
   if (userRules[key]) return { category: userRules[key], key, source: 'user' };
   const up = String(desc || '').toUpperCase();
+  for (const r of custom) if ((!r.type || r.type === type) && ruleMatches(r.pattern, up)) return { category: r.category, key, source: 'rule' };
   const rules = type === 'credit' ? CREDIT_RULES : DEBIT_RULES;
   for (const [cat, re] of rules) if (re.test(up)) return { category: cat, key, source: 'auto' };
   return { category: type === 'credit' ? 'Other Income' : 'Uncategorized', key, source: 'auto' };

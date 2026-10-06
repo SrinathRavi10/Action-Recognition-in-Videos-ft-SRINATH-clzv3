@@ -1,0 +1,54 @@
+name: Build desktop apps
+
+# Builds the Paisa Ledger desktop app (Windows installer + portable .exe, macOS .dmg, Linux AppImage).
+# Run it from the Actions tab ("Run workflow"), or push a tag like v2.0.0 to also create a GitHub Release.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['claude/**', main]
+    paths: ['ledger/**', '.github/workflows/build-desktop.yml']
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: ledger } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: ledger/package-lock.json }
+      - run: npm ci
+      - run: npm test
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, script: dist:win, name: windows, files: 'ledger/dist/*.exe' }
+          - { os: macos-latest, script: dist:mac, name: macos, files: 'ledger/dist/*.dmg' }
+          - { os: ubuntu-latest, script: dist:linux, name: linux, files: 'ledger/dist/*.AppImage' }
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { working-directory: ledger } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: ledger/package-lock.json }
+      - run: npm ci
+      - run: npm run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # unsigned builds
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PaisaLedger-${{ matrix.name }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.files }}

@@ -439,11 +439,26 @@ const CSV_H = {
   type: /^(dr\s*\/\s*cr|cr\s*\/\s*dr|type|txn type|transaction type)$/i,
 };
 
-export function parseCSVStatement(text) {
-  const table = parseCSVText(text.replace(/^﻿/, ''));
-  let hi = table.findIndex((r) => r.some((c) => CSV_H.date.test(c.trim())) && r.some((c) => CSV_H.dr.test(c) || CSV_H.cr.test(c) || CSV_H.amt.test(c.trim())));
-  if (hi < 0) return { rows: [], warnings: ['Could not find a header row with Date and Amount/Debit/Credit columns.'], stats: { total: 0, checked: 0, reconciled: 0 }, meta: {} };
-  const head = table[hi].map((c) => c.trim());
+/** Excel stores dates as day counts since 1899-12-30. */
+function excelSerial(s) {
+  const n = Number(s);
+  if (!Number.isInteger(Math.floor(n)) || !(n > 30000 && n < 80000)) return null;
+  const d = new Date(Math.round((n - 25569) * 86400000));
+  return d.toISOString().slice(0, 10);
+}
+const cellDate = (raw) => {
+  const s = String(raw ?? '').trim();
+  const d = matchDate(s);
+  if (d) return d.iso;
+  const x = /^\d{5}(\.\d+)?$/.test(s) ? excelSerial(s) : null;
+  return x;
+};
+
+/** Find the header row and column indexes. Returns null if the table has no recognisable header. */
+export function detectColumns(table) {
+  const hi = table.findIndex((r) => r.some((c) => CSV_H.date.test(String(c).trim())) && r.some((c) => CSV_H.dr.test(c) || CSV_H.cr.test(c) || CSV_H.amt.test(String(c).trim())));
+  if (hi < 0) return null;
+  const head = table[hi].map((c) => String(c).trim());
   const idx = {};
   head.forEach((h, i) => {
     for (const k of Object.keys(CSV_H)) {
@@ -451,33 +466,56 @@ export function parseCSVStatement(text) {
     }
   });
   if (idx.date == null) idx.date = head.findIndex((h) => /date/i.test(h));
+  return { hi, idx, signature: head.join('|').toLowerCase() };
+}
+
+/**
+ * Parse a table (array of rows of strings) from CSV or Excel. `mapping` = { hi, idx } overrides detection
+ * (used by the manual column mapper). Returns needsMapping:true when no header can be found.
+ */
+export function parseTable(table, mapping = null) {
+  const det = mapping || detectColumns(table);
+  if (!det) return { rows: [], needsMapping: true, table, warnings: ['Could not find a header row with Date and Amount/Debit/Credit columns.'], stats: { total: 0, checked: 0, reconciled: 0 }, meta: {} };
+  const { hi, idx } = det;
   const out = [];
   for (const r of table.slice(hi + 1)) {
-    const d = matchDate((r[idx.date] || '').trim());
-    if (!d) continue;
-    const desc = (r[idx.desc] ?? '').replace(/\s+/g, ' ').trim();
+    const date = cellDate(r[idx.date]);
+    if (!date) continue;
+    const desc = String(r[idx.desc] ?? '').replace(/\s+/g, ' ').trim();
     let amount = null, type = null;
     const dr = idx.dr != null ? parseAmount(r[idx.dr]) : null;
     const cr = idx.cr != null ? parseAmount(r[idx.cr]) : null;
     if (dr) { amount = dr; type = 'debit'; }
     else if (cr) { amount = cr; type = 'credit'; }
     else if (idx.amt != null) {
-      const raw = (r[idx.amt] || '').trim();
+      const raw = String(r[idx.amt] ?? '').trim();
       amount = parseAmount(raw.replace(/^-/, ''));
       if (/^-|^\(/.test(raw)) type = 'debit';
-      const t = idx.type != null ? (r[idx.type] || '').trim() : '';
-      if (/^(dr|d|debit)/i.test(t)) type = 'debit';
-      else if (/^(cr|c|credit)/i.test(t)) type = 'credit';
+      const t = idx.type != null ? String(r[idx.type] ?? '').trim() : '';
+      if (/^(dr|d|debit|withdrawal)/i.test(t)) type = 'debit';
+      else if (/^(cr|c|credit|deposit)/i.test(t)) type = 'credit';
       else if (/dr\.?$/i.test(raw)) type = 'debit';
       else if (/cr\.?$/i.test(raw)) type = 'credit';
       if (!type) type = 'credit';
     }
     if (!amount) continue;
     const balance = idx.bal != null ? parseAmount(r[idx.bal]) : null;
-    out.push({ date: d.iso, desc, amount, balance, type, typeSource: 'column' });
+    out.push({ date, desc, amount, balance, type, typeSource: 'column' });
   }
   const dates = out.map((r) => r.date).sort();
   const warnings = [];
   if (!out.length) warnings.push('No transaction rows were recognised.');
-  return { rows: out, warnings, stats: { total: out.length, checked: 0, reconciled: 0, from: dates[0], to: dates.at(-1) }, meta: {} };
+  // Reconcile when balances are present (order may be newest-first).
+  let checked = 0, reconciled = 0;
+  const withBal = out.length > 1 && out[0].date > out.at(-1).date ? [...out].reverse() : out;
+  for (let i = 1; i < withBal.length; i++) {
+    const a = withBal[i - 1], b = withBal[i];
+    if (a.balance == null || b.balance == null) continue;
+    checked++;
+    if (Math.abs(a.balance + (b.type === 'credit' ? b.amount : -b.amount) - b.balance) < 0.011) reconciled++;
+  }
+  if (checked && reconciled < checked) warnings.push(`Running balance did not reconcile on ${checked - reconciled} of ${checked} rows – check the column mapping.`);
+  return { rows: out, warnings, stats: { total: out.length, checked, reconciled, from: dates[0], to: dates.at(-1) }, meta: {}, signature: det.signature };
 }
+
+export const parseCSVStatement = (text, mapping = null) => parseTable(parseCSVText(text.replace(/^﻿/, '')), mapping);

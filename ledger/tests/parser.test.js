@@ -126,3 +126,21 @@ test('vertically-centred cells with two-line narration (date/amount sit between 
   assert.equal(r.stats.reconciled, r.stats.checked);
   assert.equal(r.rows[2].desc.includes('0000410000000001'), false);
 });
+
+import { parseTable, detectColumns } from '../js/parser.js';
+
+test('table (xlsx-like) with Excel date serials, mapping override and reconciliation', () => {
+  const table = [['Statement for A/C 123'], ['Txn Date', 'Description', 'Withdrawal', 'Deposit', 'Balance'], ['46082', 'UPI-SWIGGY', '450.00', '', '9550.00'], ['46083', 'SALARY', '', '50000', '59550.00']];
+  const r = parseTable(table);
+  assert.equal(r.rows.length, 2);
+  assert.equal(r.rows[0].date, '2026-03-01');
+  assert.equal(r.stats.reconciled, r.stats.checked);
+  assert.equal(r.stats.checked, 1);
+  // headerless table needs the manual mapper
+  const raw = [['01/03/2026', 'Coffee', '-150'], ['02/03/2026', 'Pay', '5000']];
+  const none = parseTable(raw);
+  assert.equal(none.needsMapping, true);
+  const mapped = parseTable(raw, { hi: -1, idx: { date: 0, desc: 1, amt: 2 } });
+  assert.deepEqual(mapped.rows.map((x) => [x.type, x.amount]), [['debit', 150], ['credit', 5000]]);
+  assert.ok(detectColumns(table).signature.includes('txn date'));
+});

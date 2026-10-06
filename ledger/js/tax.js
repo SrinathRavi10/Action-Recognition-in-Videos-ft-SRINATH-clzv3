@@ -58,44 +58,82 @@ function hraExemption(p) {
   return Math.max(0, Math.min(hra, rent - 0.1 * basic, (p.metro ? 0.5 : 0.4) * basic));
 }
 
-function finish(taxable, grossIncome, regime, rules, slabs, p, parts) {
-  const { tax: base, rows } = slabTax(taxable, slabs);
+export const CAPITAL_GAINS = { stcgRate: 0.2, ltcgRate: 0.125, ltcgExempt: 125000 };
+
+/** Business / profession income under presumptive schemes. */
+export function businessIncome(p) {
+  const r = n(p.businessReceipts);
+  if (!r || !p.businessType || p.businessType === 'none') return 0;
+  if (p.businessType === '44ADA') return r * 0.5;
+  if (p.businessType === '44AD') return r * (p.businessDigital ? 0.06 : 0.08);
+  return 0;
+}
+
+/** Let-out house property: net income (can be negative) before self-occupied interest. */
+export function letOutIncome(p) {
+  const nav = Math.max(0, n(p.rentalIncome) - n(p.municipalTax));
+  return nav - 0.3 * nav - n(p.letOutInterest);
+}
+
+/** Capital-gains tax at special rates, using any unused basic exemption (resident individuals). */
+function specialTaxes(normalTaxable, stcg, ltcg, exemptionLimit) {
+  let unused = Math.max(0, exemptionLimit - normalTaxable);
+  let l = Math.max(0, ltcg - CAPITAL_GAINS.ltcgExempt);
+  let st = stcg;
+  const u1 = Math.min(unused, st); st -= u1; unused -= u1;
+  const u2 = Math.min(unused, l); l -= u2;
+  return { stcgTaxable: st, ltcgTaxable: l, income: Math.max(0, stcg - (stcg - st)) + 0, tax: st * CAPITAL_GAINS.stcgRate + l * CAPITAL_GAINS.ltcgRate, totalIncomeAdd: stcg + Math.max(0, ltcg - CAPITAL_GAINS.ltcgExempt) };
+}
+
+function finish(normalTaxable, grossIncome, regime, rules, slabs, p, parts) {
+  const sp = specialTaxes(normalTaxable, n(p.stcgEquity), n(p.ltcgEquity), slabs[0][0]);
+  const totalIncome = normalTaxable + sp.totalIncomeAdd;
+  const { tax: base, rows } = slabTax(normalTaxable, slabs);
   let rebate = 0;
   let tax = base;
-  if (taxable <= rules.rebateLimit) {
+  if (totalIncome <= rules.rebateLimit) {
     rebate = Math.min(base, rules.rebateMax);
     tax = base - rebate;
   } else if (regime === 'new') {
     // Marginal relief: tax payable can't exceed the income above the rebate limit.
-    const capped = Math.min(base, taxable - rules.rebateLimit);
+    const capped = Math.min(base, Math.max(0, totalIncome - rules.rebateLimit));
     rebate = base - capped;
     tax = capped;
   }
-  const { surcharge, rate } = withSurcharge(tax, taxable, slabs, rules.surcharge);
-  const cess = (tax + surcharge) * BASE_RULES.cess;
-  const total = tax + surcharge + cess;
-  return { regime, ...parts, grossIncome, taxable, slabRows: rows, slabTax: base, rebate, taxAfterRebate: tax, surcharge, surchargeRate: rate, cess, total: Math.round(total) };
+  const { surcharge: scN, rate } = withSurcharge(tax, totalIncome, slabs, rules.surcharge);
+  const scS = sp.tax * Math.min(rate, 0.15);
+  const surcharge = scN + scS;
+  const cess = (tax + sp.tax + surcharge) * BASE_RULES.cess;
+  const total = tax + sp.tax + surcharge + cess;
+  return { regime, ...parts, grossIncome, taxable: normalTaxable, totalIncome, slabRows: rows, slabTax: base, rebate, taxAfterRebate: tax,
+    special: { stcg: n(p.stcgEquity), ltcg: n(p.ltcgEquity), tax: sp.tax, ltcgExemptUsed: Math.min(n(p.ltcgEquity), CAPITAL_GAINS.ltcgExempt) },
+    surcharge, surchargeRate: rate, cess, total: Math.round(total) };
 }
+
+function otherIncome(p) { return n(p.savingsInterest) + n(p.fdInterest) + n(p.otherIncome); }
 
 export function computeNew(p, year = '2025-26') {
   const r = TAX_YEARS[year].rules.newRegime;
   const salary = n(p.grossSalary);
-  const other = n(p.savingsInterest) + n(p.fdInterest) + n(p.otherIncome);
   const std = salary > 0 ? Math.min(r.standardDeduction, salary) : 0;
   const nps = Math.min(n(p.employerNPS), r.npsEmployerPct * n(p.basicSalary));
-  const gross = salary + other;
+  const hp = Math.max(0, letOutIncome(p)); // house-property losses cannot be set off in the new regime
+  const biz = businessIncome(p);
+  const gross = salary + otherIncome(p) + hp + biz;
   const taxable = Math.max(0, gross - std - nps);
-  return finish(taxable, gross, 'new', r, r.slabs, p, { exemptions: [], deductions: [{ label: 'Standard deduction', amount: std }, ...(nps ? [{ label: 'Employer NPS 80CCD(2)', amount: nps }] : [])] });
+  return finish(taxable, gross, 'new', r, r.slabs, p, { exemptions: [], deductions: [{ label: 'Standard deduction', amount: std }, ...(nps ? [{ label: 'Employer NPS 80CCD(2)', amount: nps }] : [])], heads: { salary, other: otherIncome(p), houseProperty: hp, business: biz } });
 }
 
 export function computeOld(p, year = '2025-26') {
   const r = TAX_YEARS[year].rules.oldRegime;
   const age = p.age || 'below60';
   const salary = n(p.grossSalary);
-  const other = n(p.savingsInterest) + n(p.fdInterest) + n(p.otherIncome);
   const hra = hraExemption(p);
   const std = salary > 0 ? Math.min(r.standardDeduction, salary) : 0;
-  const homeLoan = Math.min(n(p.homeLoanInterest), r.capHomeLoan);
+  const selfInt = Math.min(n(p.homeLoanInterest), r.capHomeLoan);
+  const hpTotal = letOutIncome(p) - selfInt;
+  const hpGain = Math.max(0, hpTotal);
+  const hpLoss = Math.min(r.capHomeLoan, Math.max(0, -hpTotal)); // loss set-off against other heads is capped at ₹2L
   const nps = Math.min(n(p.employerNPS), r.npsEmployerPct * n(p.basicSalary));
   const c80 = Math.min(n(p.sec80C), r.cap80C);
   const nps1b = Math.min(n(p.nps80CCD1B), r.cap80CCD1B);
@@ -106,14 +144,15 @@ export function computeOld(p, year = '2025-26') {
   const g80 = n(p.donations80G);
   const tta = age === 'below60' ? Math.min(n(p.savingsInterest), r.cap80TTA) : 0;
   const ttb = age !== 'below60' ? Math.min(n(p.savingsInterest) + n(p.fdInterest), r.cap80TTB) : 0;
-  const gross = salary + other;
+  const biz = businessIncome(p);
+  const gross = salary + otherIncome(p) + hpGain + biz;
   const deductions = [
-    ['Standard deduction', std], ['Home-loan interest 24(b)', homeLoan], ['Employer NPS 80CCD(2)', nps], ['80C', c80], ['NPS 80CCD(1B)', nps1b],
+    ['Standard deduction', std], ['House-property loss set-off', hpLoss], ['Employer NPS 80CCD(2)', nps], ['80C', c80], ['NPS 80CCD(1B)', nps1b],
     ['Health insurance 80D', d80], ['Education-loan interest 80E', e80], ['Donations 80G', g80], ['Savings interest 80TTA', tta], ['Senior interest 80TTB', ttb],
   ].filter(([, a]) => a > 0).map(([label, amount]) => ({ label, amount }));
   const exemptions = hra ? [{ label: 'HRA exemption 10(13A)', amount: hra }] : [];
   const taxable = Math.max(0, gross - hra - deductions.reduce((a, d) => a + d.amount, 0));
-  return finish(taxable, gross, 'old', r, r.slabs[age] || r.slabs.below60, p, { exemptions, deductions });
+  return finish(taxable, gross, 'old', r, r.slabs[age] || r.slabs.below60, p, { exemptions, deductions, heads: { salary, other: otherIncome(p), houseProperty: hpGain, business: biz } });
 }
 
 /** Total additional old-regime deductions needed before the old regime beats the new one (null if never / already). */
@@ -130,6 +169,40 @@ function breakEven(p, year, newTotal) {
   return Math.ceil(hi);
 }
 
+/** Advance-tax instalments: needed only if the liability after TDS is ₹10,000 or more. */
+export function advanceTaxPlan(totalTax, paid, { year = '2025-26', presumptive = false, today } = {}) {
+  const net = Math.max(0, totalTax - paid);
+  if (net < 10000) return { required: false, net, items: [] };
+  const y = +year.slice(0, 4);
+  const steps = presumptive ? [[1, `${y + 1}-03-15`]] : [[0.15, `${y}-06-15`], [0.45, `${y}-09-15`], [0.75, `${y}-12-15`], [1, `${y + 1}-03-15`]];
+  let prev = 0;
+  const items = steps.map(([pct, due]) => {
+    const cum = Math.round(net * pct);
+    const inst = cum - prev; prev = cum;
+    return { due, pct, cumulative: cum, instalment: inst, past: today ? due < today : false };
+  });
+  return { required: true, net, items };
+}
+
+/** Year-end moves that could cut tax under the old regime: unused headroom × marginal rate. */
+export function savingIdeas(p, year, res) {
+  const r = TAX_YEARS[year].rules.oldRegime;
+  const age = p.age || 'below60';
+  const taxable = res.old.taxable;
+  const slabs = r.slabs[age] || r.slabs.below60;
+  const marginal = (slabs.find(([u]) => taxable <= u) || slabs.at(-1))[1] * 1.04;
+  if (!marginal) return [];
+  const ideas = [];
+  const h80c = r.cap80C - Math.min(n(p.sec80C), r.cap80C);
+  if (h80c > 0) ideas.push({ label: '80C headroom (ELSS, PPF, tax-saver FD, EPF top-up)', amount: h80c, saves: Math.min(h80c, taxable) * marginal });
+  const h1b = r.cap80CCD1B - Math.min(n(p.nps80CCD1B), r.cap80CCD1B);
+  if (h1b > 0) ideas.push({ label: 'NPS extra ₹50,000 under 80CCD(1B)', amount: h1b, saves: Math.min(h1b, taxable) * marginal });
+  const selfCap = age === 'below60' ? r.cap80D_self : r.cap80D_self_senior;
+  const hd = selfCap - Math.min(n(p.health80DSelf), selfCap);
+  if (hd > 0) ideas.push({ label: 'Health insurance for you & family (80D)', amount: hd, saves: Math.min(hd, taxable) * marginal });
+  return ideas.filter((i) => i.saves > 500).sort((a, b) => b.saves - a.saves);
+}
+
 export function compare(profile, year = '2025-26') {
   const p = { age: 'below60', ...profile };
   const newR = computeNew(p, year);
@@ -139,12 +212,28 @@ export function compare(profile, year = '2025-26') {
   const saving = Math.abs(oldR.total - newR.total);
   const be = better === 'new' ? breakEven(p, year, newR.total) : 0;
   const totalClaimedOld = oldR.deductions.reduce((a, d) => a + d.amount, 0) + oldR.exemptions.reduce((a, d) => a + d.amount, 0);
-  return {
+  const out = {
     year, new: newR, old: oldR, better, saving, paid,
     newBalance: newR.total - paid, oldBalance: oldR.total - paid,
     extraDeductionsNeeded: be, totalClaimedOld,
     verified: TAX_YEARS[year].verified, note: TAX_YEARS[year].note || null,
   };
+  out.ideas = savingIdeas(p, year, out);
+  return out;
+}
+
+/** Flat summary for filing-portal data entry. */
+export function itrSummary(c, profile) {
+  const r = c.better === 'old' ? c.old : c.new;
+  const rows = [
+    ['Regime (cheaper for you)', c.better === 'old' ? 'Old regime' : 'New regime'],
+    ['Income from salary', r.heads.salary], ['Income from house property', r.heads.houseProperty], ['Profits from business / profession', r.heads.business], ['Income from other sources', r.heads.other],
+    ['Short-term capital gains (equity, 111A)', r.special.stcg], ['Long-term capital gains (equity, 112A)', r.special.ltcg],
+    ...r.exemptions.map((e) => [e.label, -e.amount]), ...r.deductions.map((d) => [d.label, -d.amount]),
+    ['Total income (normal-rate part)', r.taxable], ['Tax on normal income', r.slabTax], ['Rebate 87A / relief', -r.rebate], ['Tax on capital gains', r.special.tax], ['Surcharge', r.surcharge], ['Health & education cess', r.cess], ['Total tax liability', r.total],
+    ['TDS / advance tax paid', -c.paid], [r.total - c.paid > 0 ? 'Tax payable' : 'Refund due', Math.abs(r.total - c.paid)],
+  ];
+  return rows.filter(([, v]) => v !== 0 && v !== '' && v != null);
 }
 
 /** Pull candidate figures out of Form 16 / certificate text. Returns { field: amount } for the user to confirm. */

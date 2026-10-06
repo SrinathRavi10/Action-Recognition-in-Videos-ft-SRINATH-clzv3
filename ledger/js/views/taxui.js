@@ -1,8 +1,9 @@
 import { state, addDoc } from '../store.js';
-import { compare, TAX_YEARS, extractForm16, extractInterest } from '../tax.js';
+import { compare, TAX_YEARS, extractForm16, extractInterest, advanceTaxPlan, itrSummary, businessIncome } from '../tax.js';
+import { icon } from '../icons.js';
 import { readPdf, pagesToText, PasswordCancelled } from '../pdfio.js';
 import { askPassword, toast, chip } from '../ui.js';
-import { esc, fmt, fmt2, monthLabel, longDate } from '../util.js';
+import { esc, fmt, fmt2, monthLabel, longDate, toISO } from '../util.js';
 
 const FIELDS = [
   ['Salary', [
@@ -16,6 +17,16 @@ const FIELDS = [
     ['savingsInterest', 'Savings-account interest', ''],
     ['fdInterest', 'FD / bond interest', ''],
     ['otherIncome', 'Other taxable income', 'Freelance, rental, etc.'],
+  ]],
+  ['Capital gains (listed equity & equity mutual funds)', [
+    ['stcgEquity', 'Short-term gains (held ≤ 12 months)', 'Taxed at 20%'],
+    ['ltcgEquity', 'Long-term gains (held > 12 months)', '12.5% on gains above ₹1,25,000'],
+  ]],
+  ['House property (let out) & business', [
+    ['rentalIncome', 'Rent received from let-out property (year)', ''],
+    ['municipalTax', 'Municipal taxes paid', ''],
+    ['letOutInterest', 'Home-loan interest on the let-out property', 'No cap; loss set-off limited to ₹2L (old regime only)'],
+    ['businessReceipts', 'Business / professional receipts (year)', 'Used with the scheme below'],
   ]],
   ['Deductions (old regime)', [
     ['sec80C', '80C: EPF, PPF, ELSS, LIC, tuition…', 'Max ₹1,50,000'],
@@ -61,8 +72,10 @@ export function suggestions(fy) {
 const num = (v) => (v ? String(v) : '');
 
 function form(p) {
+  const biz = `<label class="field"><span>Presumptive scheme</span><select data-change="tax-biz"><option value="none" ${!p.businessType || p.businessType === 'none' ? 'selected' : ''}>None</option><option value="44ADA" ${p.businessType === '44ADA' ? 'selected' : ''}>44ADA – professionals (50% of receipts)</option><option value="44AD" ${p.businessType === '44AD' ? 'selected' : ''}>44AD – business (6% digital / 8% other)</option></select></label>
+    <label class="check" style="align-self:end;padding-bottom:8px"><input type="checkbox" data-change="tax-flag" data-k="businessDigital" ${p.businessDigital ? 'checked' : ''}> Receipts mostly digital (44AD)</label>`;
   return FIELDS.map(([title, fs]) => `<fieldset><legend>${title}</legend><div class="fields">${fs.map(([k, label, hint]) => `
-    <label class="field"><span>${label}</span><input class="input" inputmode="numeric" data-input="tax-field" data-k="${k}" value="${num(p[k])}" placeholder="0" aria-describedby="h-${k}">${hint ? `<small id="h-${k}" class="muted">${hint}</small>` : ''}</label>`).join('')}</div></fieldset>`).join('');
+    <label class="field"><span>${label}</span><input class="input" inputmode="numeric" data-input="tax-field" data-k="${k}" value="${num(p[k])}" placeholder="0" aria-describedby="h-${k}">${hint ? `<small id="h-${k}">${hint}</small>` : ''}</label>`).join('')}${title.startsWith('House property') ? biz : ''}</div></fieldset>`).join('');
 }
 
 function regimeCard(r, best, balance) {
@@ -72,14 +85,15 @@ function regimeCard(r, best, balance) {
     ...r.deductions.map((d) => [`− ${d.label}`, d.amount]),
   ];
   return `<div class="card regime ${best ? 'best' : ''}">
-    <div class="card-head"><h3>${r.regime === 'new' ? 'New regime' : 'Old regime'}</h3>${best ? chip('Lower tax', 'good') : ''}</div>
-    <div class="big">${fmt(r.total)}</div>
-    <div class="muted small">${r.grossIncome ? `${((r.total / r.grossIncome) * 100).toFixed(1)}% of gross · ${fmt(r.total / 12)} per month` : ''}</div>
-    <table class="mini-table"><tbody>
+    <div class="card-head"><h3>${r.regime === 'new' ? 'New regime' : 'Old regime'}</h3>${best ? `<span class="chip good">${icon('check', 13)} Lower tax</span>` : ''}</div>
+    <div class="big tnum">${fmt(r.total)}</div>
+    <div class="muted small">${r.totalIncome ? `${((r.total / r.totalIncome) * 100).toFixed(1)}% of income · ${fmt(r.total / 12)} per month` : ''}</div>
+    <table class="mini-table" style="margin-top:10px"><tbody>
       ${rows.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="num">${fmt(v)}</td></tr>`).join('')}
-      <tr class="strong"><td>Taxable income</td><td class="num">${fmt(r.taxable)}</td></tr>
+      <tr class="strong"><td>Taxable income (slab rates)</td><td class="num">${fmt(r.taxable)}</td></tr>
       <tr><td>Tax on slabs</td><td class="num">${fmt(r.slabTax)}</td></tr>
       ${r.rebate ? `<tr><td>− Rebate 87A${r.regime === 'new' ? ' / marginal relief' : ''}</td><td class="num">${fmt(r.rebate)}</td></tr>` : ''}
+      ${r.special.tax ? `<tr><td>+ Capital-gains tax (20% / 12.5%)</td><td class="num">${fmt(r.special.tax)}</td></tr>` : ''}
       ${r.surcharge ? `<tr><td>+ Surcharge</td><td class="num">${fmt(r.surcharge)}</td></tr>` : ''}
       <tr><td>+ Cess 4%</td><td class="num">${fmt(r.cess)}</td></tr>
       <tr class="strong"><td>Total tax</td><td class="num">${fmt(r.total)}</td></tr>
@@ -87,10 +101,20 @@ function regimeCard(r, best, balance) {
     <details><summary>Slab-wise tax</summary><table class="mini-table"><tbody>${r.slabRows.map((s) => `<tr><td>${fmt(s.from)} – ${s.to === Infinity ? 'above' : fmt(s.to)} @ ${(s.rate * 100).toFixed(0)}%</td><td class="num">${fmt(s.tax)}</td></tr>`).join('')}</tbody></table></details></div>`;
 }
 
+export function computeFor() {
+  const p = state.settings.taxProfile;
+  return compare(p, state.settings.taxYear);
+}
+
+export function itrText() {
+  const c = computeFor();
+  return itrSummary(c, state.settings.taxProfile).map(([l, v]) => `${l}: ${typeof v === 'number' ? Math.round(v).toLocaleString('en-IN') : v}`).join('\n');
+}
+
 export function resultHtml() {
   const p = state.settings.taxProfile;
   const fy = state.settings.taxYear;
-  if (!+p.grossSalary && !+p.otherIncome) return '<section class="card"><p class="muted">Enter your gross salary to see the comparison.</p></section>';
+  if (!+p.grossSalary && !+p.otherIncome && !businessIncome(p) && !+p.stcgEquity && !+p.ltcgEquity && !+p.rentalIncome) return `<section class="card">${emptyHint()}</section>`;
   const c = compare(p, fy);
   const hasPaid = c.paid > 0;
   let verdict;
@@ -99,10 +123,24 @@ export function resultHtml() {
   let tip = '';
   if (c.better === 'new' && c.extraDeductionsNeeded) tip = `<p>The old regime would only win if your total old-regime deductions and exemptions reached about <b>${fmt(c.totalClaimedOld + c.extraDeductionsNeeded)}</b> (you have ${fmt(c.totalClaimedOld)} now).</p>`;
   if (c.better === 'new' && c.extraDeductionsNeeded === null) tip = '<p>No realistic level of deductions makes the old regime cheaper at this income.</p>';
+  const best = c.better === 'old' ? c.old : c.new;
+  const today = toISO(new Date());
+  const adv = advanceTaxPlan(best.total, c.paid, { year: fy, presumptive: !!p.businessType && p.businessType !== 'none', today });
+  const ideas = c.better === 'old' || c.saving < 40000 ? c.ideas : [];
+  const itr = itrSummary(c, p);
   return `
-    <section class="card verdict"><h2>${verdict}</h2>${tip}${c.note ? `<p class="warn-line">⚠ ${esc(c.note)}</p>` : ''}</section>
-    <div class="grid2">${regimeCard(c.new, c.better === 'new' && c.saving, hasPaid ? c.newBalance : null)}${regimeCard(c.old, c.better === 'old' && c.saving, hasPaid ? c.oldBalance : null)}</div>`;
+    <section class="card verdict"><h2>${icon('rupee', 20)} ${verdict}</h2>${tip}${c.note ? `<p class="warn-line">${icon('alert', 16)}<span>${esc(c.note)}</span></p>` : ''}</section>
+    <div class="grid2">${regimeCard(c.new, c.better === 'new' && c.saving, hasPaid ? c.newBalance : null)}${regimeCard(c.old, c.better === 'old' && c.saving, hasPaid ? c.oldBalance : null)}</div>
+    ${adv.required ? `<section class="card"><div class="card-head"><h2>${icon('calendar', 18)} Advance-tax calendar</h2><span class="muted small">on ${fmt(adv.net)} net liability</span></div>
+      <div class="table-wrap"><table class="tx small"><thead><tr><th>Due date</th><th class="num">Cumulative</th><th class="num">Pay now</th><th></th></tr></thead><tbody>${adv.items.map((i) => `<tr class="${i.past ? 'dim' : ''}"><td>${longDate(i.due)}</td><td class="num">${fmt(i.cumulative)} <span class="faint">(${(i.pct * 100).toFixed(0)}%)</span></td><td class="num">${fmt(i.instalment)}</td><td>${i.past ? '<span class="chip">Passed</span>' : '<span class="chip info">Upcoming</span>'}</td></tr>`).join('')}</tbody></table></div>
+      <p class="muted xs">Salaried taxpayers whose employer deducts enough TDS usually owe nothing here. Interest u/s 234B/C applies if instalments are missed.</p></section>` : ''}
+    ${ideas.length ? `<section class="card"><div class="card-head"><h2>${icon('sparkle', 18)} Before 31 March – ways to cut tax (old regime)</h2></div><ul class="plainlist">${ideas.map((i) => `<li><span><b>${esc(i.label)}</b><div class="muted xs">up to ${fmt(i.amount)} more</div></span><span class="pos strong tnum">saves ≈ ${fmt(i.saves)}</span></li>`).join('')}</ul><p class="muted xs">Estimates at your marginal slab rate. Only worth it if the old regime suits you.</p></section>` : ''}
+    <section class="card"><div class="card-head"><h2>${icon('report', 18)} Summary for the ITR form</h2><button class="btn small" data-action="itr-copy">${icon('file', 14)} Copy</button></div>
+      <table class="mini-table"><tbody>${itr.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="num">${typeof v === 'number' ? fmt(v) : esc(v)}</td></tr>`).join('')}</tbody></table>
+      <p class="muted xs">A cross-check against what the e-filing portal pre-fills from Form 26AS / AIS – not a substitute for it.</p></section>`;
 }
+
+const emptyHint = () => `<div class="empty">${icon('rupee', 34)}<b>Enter your income to compare regimes</b><span>Start with gross salary, or import a Form 16 under Documents.</span></div>`;
 
 function estimateTab() {
   const p = state.settings.taxProfile;
@@ -116,7 +154,7 @@ function estimateTab() {
       <label class="check"><input type="checkbox" data-change="tax-flag" data-k="metro" ${p.metro ? 'checked' : ''}> Live in a metro (Delhi, Mumbai, Kolkata, Chennai)</label>
       <label class="check"><input type="checkbox" data-change="tax-flag" data-k="parentsSenior" ${p.parentsSenior ? 'checked' : ''}> Parents are 60+</label>
     </div>
-    ${sug.length ? `<div class="suggest"><b>Found in your statements for this year</b>${sug.map((s) => `<div class="row between"><span>${esc(s.label)}: <b>${fmt(s.amount)}</b></span><button class="btn small" data-action="tax-apply" data-k="${s.key}" data-v="${s.amount}">Use</button></div>`).join('')}<p class="muted small">Suggestions are keyword matches – check them before using.</p></div>` : ''}
+    ${sug.length ? `<div class="suggest"><b>${icon('sparkle', 16)} Found in your statements for this year</b>${sug.map((s) => `<div class="row between"><span>${esc(s.label)}: <b>${fmt(s.amount)}</b></span><button class="btn small" data-action="tax-apply" data-k="${s.key}" data-v="${s.amount}">Use</button></div>`).join('')}<p class="muted small" style="margin:0">Suggestions are keyword matches – check them before using.</p></div>` : ''}
     <div id="taxForm">${form(p)}</div>
   </section>
   <div id="taxResult">${resultHtml()}</div>`;
@@ -151,12 +189,14 @@ function rentTab() {
   return `
   <section class="card">
     <h2>Rent receipts for FY ${fy}</h2>
+    <div class="fields" style="margin-bottom:14px"><label class="field"><span>Your name (tenant)</span><input class="input" data-input="tax-text" data-k="tenantName" value="${esc(state.settings.taxProfile.tenantName || '')}"></label>
+      <label class="field"><span>Rented property address</span><input class="input" data-input="tax-text" data-k="propertyAddress" value="${esc(state.settings.taxProfile.propertyAddress || '')}"></label></div>
     <form class="fields" data-submit="rent-add">
       <label class="field"><span>Month</span><input class="input" type="month" name="month" required min="${a.slice(0, 7)}" max="${b.slice(0, 7)}" value="${a.slice(0, 7)}"></label>
       <label class="field"><span>Rent (₹)</span><input class="input" name="amount" inputmode="numeric" required value="${last.amount || ''}"></label>
       <label class="field"><span>Landlord name</span><input class="input" name="landlord" required value="${esc(last.landlord || '')}"></label>
       <label class="field"><span>Landlord PAN</span><input class="input" name="pan" maxlength="10" placeholder="ABCDE1234F" value="${esc(last.pan || '')}" style="text-transform:uppercase"></label>
-      <div class="row gap end"><button class="btn primary">Add receipt</button><button type="button" class="btn" data-action="rent-fill">Fill all 12 months</button></div>
+      <div class="row gap end wrap"><button class="btn primary">Add receipt</button><button type="button" class="btn" data-action="rent-fill">Fill all 12 months</button>${list.length ? `<button type="button" class="btn" data-action="rent-print">${icon('print', 16)} Print receipts</button>` : ''}</div>
     </form>
     ${noPan ? '<p class="warn-line">⚠ Annual rent above ₹1,00,000: your employer will ask for the landlord’s PAN for HRA exemption.</p>' : ''}
   </section>
@@ -167,11 +207,11 @@ function rentTab() {
 
 export function tax() {
   const tab = state.ui.taxTab;
-  const tabs = [['estimate', 'Old vs new regime'], ['docs', 'Documents'], ['rent', 'Rent receipts']];
+  const tabs = [['estimate', 'Old vs new regime', 'rupee'], ['docs', 'Documents', 'file'], ['rent', 'Rent receipts', 'receipt']];
   return `
-  <div class="page-head"><h1>Tax helper</h1></div>
-  <div class="banner">This is an <b>estimate</b> for a salaried individual using published slabs. It is not tax or filing advice – check with a qualified professional or the Income Tax portal before you file.</div>
-  <nav class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${tab === k}" class="${tab === k ? 'on' : ''}" data-action="tax-tab" data-tab="${k}">${l}</button>`).join('')}</nav>
+  <div class="page-head"><div><h1>Tax helper</h1><p>Old vs new regime, capital gains, advance tax and your documents.</p></div></div>
+  <div class="banner">${icon('info', 18)}<div>This is an <b>estimate</b> for a salaried individual using published slabs. It is not tax or filing advice – check with a qualified professional or the Income Tax portal before you file.</div></div>
+  <nav class="tabs" role="tablist">${tabs.map(([k, l, ic]) => `<button role="tab" aria-selected="${tab === k}" class="${tab === k ? 'on' : ''}" data-action="tax-tab" data-tab="${k}">${icon(ic, 16)}${l}</button>`).join('')}</nav>
   ${tab === 'docs' ? docsTab() : tab === 'rent' ? rentTab() : estimateTab()}`;
 }
 
@@ -195,4 +235,24 @@ export async function uploadDocs(files, kind, rerender) {
   }
   toast(`${files.length} document${files.length === 1 ? '' : 's'} added.`);
   rerender();
+}
+
+
+/** Print one rent receipt per month (uses a temporary sheet shown only when printing). */
+export function printReceipts() {
+  const p = state.settings.taxProfile;
+  const [a, b] = fyRange(state.settings.taxYear);
+  const list = state.rent.filter((r) => r.month >= a.slice(0, 7) && r.month <= b.slice(0, 7)).sort((x, y) => (x.month < y.month ? -1 : 1));
+  if (!list.length) return;
+  document.getElementById('receiptSheet')?.remove();
+  const sheet = document.createElement('div');
+  sheet.id = 'receiptSheet';
+  sheet.innerHTML = list.map((r) => `<section class="rcpt"><h2>Rent Receipt</h2><p class="rn">No. ${r.month.replace('-', '')}</p>
+    <p>Received a sum of <b>₹ ${r.amount.toLocaleString('en-IN')}</b> from <b>${esc(p.tenantName || '________________')}</b> towards the rent of the property at <b>${esc(p.propertyAddress || '________________________')}</b> for the month of <b>${monthLabel(r.month)}</b>.</p>
+    <div class="sig"><div><b>${esc(r.landlord)}</b><br>Landlord${r.pan ? `<br>PAN: ${esc(r.pan)}` : ''}</div><div>Signature<br><br>_______________</div></div></section>`).join('');
+  document.body.appendChild(sheet);
+  document.documentElement.classList.add('printing-receipts');
+  const done = () => { document.documentElement.classList.remove('printing-receipts'); sheet.remove(); removeEventListener('afterprint', done); };
+  addEventListener('afterprint', done);
+  setTimeout(() => window.print(), 50);
 }

@@ -35,7 +35,7 @@ export async function readPdf(file, askPassword) {
     pages.push(groupLines(items));
   }
   const textChars = pages.reduce((a, p) => a + p.reduce((b, l) => b + l.items.reduce((c, i) => c + i.str.length, 0), 0), 0);
-  return { pages, textChars, numPages: pdf.numPages };
+  return { pages, textChars, numPages: pdf.numPages, doc: pdf };
 }
 
 export const pagesToText = (pages) => pages.map((p) => p.map((l) => l.items.map((i) => i.str).join(' ')).join('\n')).join('\n');

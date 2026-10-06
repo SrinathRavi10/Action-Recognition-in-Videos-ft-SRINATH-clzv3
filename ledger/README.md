@@ -1,51 +1,56 @@
 # Paisa Ledger
 
-An offline-first personal finance app: **bank-statement analyser**, **bill & subscription tracker** and **tax helper**
-in one installable web app. Everything runs in your browser; there is no server and no network access
-(the Content-Security-Policy blocks outside connections).
+A private, offline-first money app: **bank-statement analyser**, **bill & subscription tracker**, **tax helper** and **planner**.
+It ships as a **desktop app** (Windows / macOS / Linux) and also runs as an installable web app.
+There is no server and no account — everything stays on your device, and the app blocks all outside network connections.
 
-## Run
+## Get the desktop app (no terminal needed)
+
+1. On GitHub open the repository → **Actions** → **Build desktop apps** → **Run workflow** (it also runs automatically on every push).
+2. When it finishes (~5–10 minutes) open the run and download the artifact for your system:
+   * **PaisaLedger-windows** – `PaisaLedger-Setup-x.y.z.exe` (installer) and `PaisaLedger-Portable-x.y.z.exe` (no install)
+   * **PaisaLedger-macos** – `.dmg`   ·   **PaisaLedger-linux** – `.AppImage`
+3. Install and open it. The installers are **unsigned**, so Windows SmartScreen shows “Windows protected your PC”: click **More info → Run anyway**. (Code-signing certificates cost money; that is the only reason for the warning.)
+
+## Run from source
 
 ```bash
 cd ledger
-python3 serve.py          # or: npm start      → http://localhost:8080
+npm install
+npm run desktop        # desktop app window
+npm start              # or serve the web app at http://localhost:8080 (needs Python 3)
+npm test               # unit tests
+npm run dist:win       # build the installer yourself (on Windows); dist:mac / dist:linux likewise
 ```
 
-Open it once, then use your browser's **Install app** option. After that it works with no connection at all
-(a service worker caches the app; pdf.js is vendored in `vendor/`). Click **Try with demo data** to explore.
+## What it does
 
-## Features
-
-| Area | What it does |
+| Area | Features |
 |---|---|
-| Import | PDF (incl. password-protected) and CSV statements from any bank. Finds Date / Debit / Credit / Balance columns itself, copes with wrapped and vertically-centred narrations, newest-first statements, and verifies every row against the running balance. Re-importing overlapping statements never double-counts. |
-| Categories | ~30 India-centric categories (UPI, SIP, EMI, OTT…). Fix a merchant once and choose "all" – it is remembered for future imports. Undo supported. |
-| Dashboard | Income / spent / invested / savings rate, category donut, 12-month stacked trend with income line, top merchants, month-over-month movers, budgets. |
-| Bills & subscriptions | Detects recurring payments (OTT, mobile, SIPs, insurance, EMIs, rent, utilities), shows monthly/yearly cost, **price-hike alerts** and **renewal reminders**, lets you mark cancelled / not-a-subscription. |
-| Tax helper | Old vs new regime for FY 2025-26 / 2026-27 (slabs, 87A rebate + marginal relief, surcharge, HRA, 80C/80D/80CCD/24b…), break-even deductions, balance payable / refund. Stores Form 16, interest certificates and rent receipts, reads figures from Form 16 PDFs, and suggests figures from your statements. **Estimates only – not filing advice.** |
-| Data | IndexedDB storage, CSV export, AES-256-GCM encrypted backup/restore, manual cash expenses, dark mode, mobile layout. |
+| **Import** | PDF (incl. password-protected), **scanned PDFs & photos via offline OCR**, Excel `.xlsx`, CSV. Auto-detects Date / Debit / Credit / Balance columns, verifies every row against the running balance, manual column mapper (remembered), duplicate-safe re-imports, statement-gap warnings. |
+| **Categories** | ~30 India-centric categories, learns from your edits, your own keyword/regex rules with preview, merchant merging, tags, split transactions, shared-expense tracking (“who owes me”), foreign-currency entries. |
+| **Home** | Animated summary, smart insights (spikes, unusually large payments, double charges, year-over-year), month-by-month and category charts with hover details, spending calendar, budgets, 30-day outlook. |
+| **Bills** | Detects OTT, mobile, SIP, insurance, EMI, rent and utility payments; **price-hike alerts**, renewal reminders (desktop notifications + calendar `.ics`), cancel guides. |
+| **Plan** | Savings goals, net worth over time, 30-day cash-flow forecast, owed-to-you ledger. |
+| **Tax** | Old vs new regime (slabs, 87A, surcharge, HRA, 80C/80D/NPS/24b…), **capital gains** (20% / 12.5%), let-out property, presumptive business income (44AD/44ADA), advance-tax calendar, year-end saving ideas, ITR summary, Form 16 reader, rent-receipt generator. **Estimates only – not filing advice.** |
+| **Reports** | Printable monthly/yearly report → PDF, plus Excel workbook export. |
+| **Security** | Optional **app lock with AES-256-GCM encryption at rest**, idle auto-lock, encrypted backups, separate profiles, backup reminders. |
+| **App feel** | Command palette (Ctrl K), keyboard shortcuts, dark mode, English + Hindi, larger text & high-contrast modes, phone-friendly layout. |
 
 ## Layout
 
 ```
-index.html  styles.css  sw.js  manifest.webmanifest
-js/parser.js      statement PDF/CSV → rows (pure, unit-tested)
-js/categorize.js  merchant normalisation + category rules
-js/recurring.js   subscription / renewal / price-hike detection
-js/tax.js         tax engine (slabs live in one table)
-js/store.js db.js state + IndexedDB + encrypted backup
-js/views/*        UI screens          js/charts.js  SVG charts
-tests/            npm test
+index.html styles.css sw.js manifest.webmanifest
+js/            app + logic (parser, categorize, recurring, insights, tax, db, ocr, xlsx …)
+js/views/      screens
+desktop/       Electron main + preload (secure app:// origin, no network)
+vendor/        pdf.js, Tesseract OCR + English data, Inter font — all bundled for offline use
+tests/         npm test
 ```
 
-## Tests
+## Honest limits
 
-```bash
-npm test
-```
-
-## Limits
-
-* Scanned (image-only) PDFs need OCR, which is not included – use the bank's CSV or a text PDF.
-* Tax slabs are kept in `js/tax.js`; FY 2026-27 assumes the FY 2025-26 rules – update after each Budget.
-* Credit-card statements work best as CSV.
+* Scanned statements rely on OCR – always check the numbers before importing.
+* Only synthetic and Chromium-generated statement layouts were tested; an unusual bank layout may need the column mapper.
+* FY 2026-27 tax rules assume FY 2025-26 slabs are unchanged – edit `js/tax.js` after each Budget.
+* Hindi covers navigation and key screens only. No phone app yet (the installable web app works on phones).
