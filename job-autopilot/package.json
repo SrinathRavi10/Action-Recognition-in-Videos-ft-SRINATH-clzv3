@@ -7,7 +7,10 @@
   "license": "MIT",
   "type": "module",
   "main": "desktop/main.cjs",
-  "repository": { "type": "git", "url": "https://github.com/SrinathRavi10/Action-Recognition-in-Videos-ft-SRINATH-clzv3.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SrinathRavi10/Action-Recognition-in-Videos-ft-SRINATH-clzv3.git"
+  },
   "scripts": {
     "desktop": "electron .",
     "mock": "node mock/server.js",
@@ -29,14 +32,71 @@
   "build": {
     "appId": "com.jobautopilot.app",
     "productName": "Job Autopilot",
-    "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["core/**/*", "ui/**/*", "desktop/**/*", "build/icon.png", "package.json", "node_modules/**/*", "!node_modules/electron/**/*", "!node_modules/playwright-core/**/*", "!node_modules/electron-builder/**/*", "!**/*.map", "!node_modules/pdfjs-dist/legacy/web/**/*", "!node_modules/pdfjs-dist/web/**/*", "!node_modules/pdfjs-dist/build/**/*", "!node_modules/pdfjs-dist/image_decoders/**/*"],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "core/**/*",
+      "ui/**/*",
+      "desktop/**/*",
+      "build/icon.png",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/electron/**/*",
+      "!node_modules/playwright-core/**/*",
+      "!node_modules/electron-builder/**/*",
+      "!**/*.map",
+      "!node_modules/pdfjs-dist/legacy/web/**/*",
+      "!node_modules/pdfjs-dist/web/**/*",
+      "!node_modules/pdfjs-dist/build/**/*",
+      "!node_modules/pdfjs-dist/image_decoders/**/*"
+    ],
     "asar": false,
-    "win": { "icon": "build/icon.ico", "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] }] },
-    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true, "shortcutName": "Job Autopilot" },
-    "portable": { "artifactName": "JobAutopilot-Portable-${version}.exe" },
-    "mac": { "icon": "build/icon.png", "category": "public.app-category.business", "target": ["dmg"] },
-    "linux": { "icon": "build/icon.png", "category": "Office", "target": ["AppImage"] },
-    "artifactName": "JobAutopilot-Setup-${version}.${ext}"
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Job Autopilot"
+    },
+    "portable": {
+      "artifactName": "JobAutopilot-Portable-${version}.exe"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.business",
+      "target": [
+        "dmg"
+      ]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Office",
+      "target": [
+        "AppImage"
+      ]
+    },
+    "artifactName": "JobAutopilot-Setup-${version}.${ext}",
+    "npmRebuild": false,
+    "nodeGypRebuild": false
   }
 }
