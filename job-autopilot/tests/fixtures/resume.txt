@@ -1,0 +1,19 @@
+JANE ROLE
+MACHINE LEARNING ENGINEER
+CONTACT   PROFILE SUMMARY
+Pune, India   Machine learning engineer who builds forecasting and vision models with Python, PyTorch and
+jane.role@example.com   scikit-learn, and ships them behind simple APIs.
++91 98765 43210
+linkedin.com/in/jane-role   github.com/janerole
+EDUCATION
+EXPERIENCE
+Aug 2021 – May 2025
+Westfield Institute of Technology
+ACME ANALYTICS (JUN 2025 – PRESENT)
+• B.Tech, Computer Science   Data Scientist — churn and demand models
+• CGPA: 8.4 / 10.0   • Built churn models in Python and SQL using XGBoost.
+BRIGHT LABS (JAN 2025 – APR 2025)
+ML Intern - NLP
+SKILLS
+• Languages: Python, SQL
+• ML/DL: PyTorch, Scikit-learn, XGBoost, NLP, LLM

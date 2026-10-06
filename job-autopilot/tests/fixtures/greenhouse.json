@@ -1,0 +1,7 @@
+{"jobs":[
+ {"id":4001,"title":"Machine Learning Engineer","updated_at":"2026-10-01T10:00:00-04:00","location":{"name":"Bengaluru, India"},"absolute_url":"https://boards.greenhouse.io/acme/jobs/4001","content":"&lt;p&gt;We need an ML engineer with Python, PyTorch and NLP. 0-2 years of experience. Freshers welcome.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Build LLM features&lt;/li&gt;&lt;/ul&gt;","departments":[{"name":"AI"}],"offices":[{"name":"Bengaluru","location":"Bengaluru, India"}]},
+ {"id":4002,"title":"Senior Machine Learning Engineer","updated_at":"2026-10-01T10:00:00-04:00","location":{"name":"Bengaluru, India"},"absolute_url":"https://boards.greenhouse.io/acme/jobs/4002","content":"&lt;p&gt;8+ years of experience.&lt;/p&gt;"},
+ {"id":4003,"title":"Account Executive","updated_at":"2026-10-01T10:00:00-04:00","location":{"name":"Mumbai, India"},"absolute_url":"https://boards.greenhouse.io/acme/jobs/4003","content":"&lt;p&gt;Sell things.&lt;/p&gt;"},
+ {"id":4004,"title":"Data Scientist","updated_at":"2026-10-02T10:00:00-04:00","location":{"name":"San Francisco, CA"},"absolute_url":"https://boards.greenhouse.io/acme/jobs/4004","content":"&lt;p&gt;2 years of experience with Python and SQL.&lt;/p&gt;"},
+ {"id":4005,"title":"Data Scientist - Computer Vision","updated_at":"2026-10-03T10:00:00-04:00","location":{"name":"Chennai, India"},"absolute_url":"https://boards.greenhouse.io/acme/jobs/4005","content":"&lt;p&gt;3+ years of experience in computer vision, OpenCV and TensorFlow.&lt;/p&gt;"}
+]}
