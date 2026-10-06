@@ -23,6 +23,8 @@ jobs:
       - name: Install a browser for the form-filling tests
         run: npx playwright-core install --with-deps chromium
       - run: npm test
+      - name: End-to-end test of the real desktop app (mock job sites)
+        run: xvfb-run -a node tests/electron.e2e.mjs
 
   build-windows:
     needs: test
