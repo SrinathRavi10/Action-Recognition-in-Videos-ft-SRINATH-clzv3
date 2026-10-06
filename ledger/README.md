@@ -12,6 +12,12 @@ There is no server and no account — everything stays on your device, and the a
    * **PaisaLedger-macos** – `.dmg`   ·   **PaisaLedger-linux** – `.AppImage`
 3. Install and open it. The installers are **unsigned**, so Windows SmartScreen shows “Windows protected your PC”: click **More info → Run anyway**. (Code-signing certificates cost money; that is the only reason for the warning.)
 
+### If the app does not open (Windows)
+1. Open **Task Manager** (Ctrl+Shift+Esc) → look for **Paisa Ledger** under *Processes* / *Details* → **End task** on every entry, then start it again (a stuck background copy can swallow new clicks).
+2. If an error box appears, it shows where the log was saved. The log is always at `%APPDATA%\Paisa Ledger\startup.log` (paste that path in File Explorer's address bar).
+3. Run it from PowerShell to see messages: `& "$env:LOCALAPPDATA\Programs\Paisa Ledger\Paisa Ledger.exe"`
+4. First launch can take 10–30 seconds while Windows Defender scans the unsigned app.
+
 ## Run from source
 
 ```bash
