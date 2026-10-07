@@ -10,7 +10,7 @@ const calls = (page) => page.evaluate(() => window.__calls);
 const called = async (page, name) => (await calls(page)).filter((c) => c[0] === name);
 
 test('every screen renders without script errors (light and dark)', async () => {
-  for (const dark of [false, true]) for (const route of ['today', 'jobs', 'approvals', 'needs', 'pipeline', 'insights', 'profile', 'sources', 'settings', 'activity', 'applications']) {
+  for (const dark of [false, true]) for (const route of ['today', 'jobs', 'approvals', 'needs', 'pipeline', 'insights', 'profile', 'answers', 'sources', 'settings', 'activity', 'applications']) {
     const p = await ui.open(all, { route, dark });
     await p.page.waitForTimeout(150);
     assert.deepEqual(p.errors, [], `${route}${dark ? ' (dark)' : ''}`);
@@ -153,5 +153,53 @@ test('theme choice is remembered', async () => {
   await p.page.locator('#themeBtn').click();
   const t1 = await p.page.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('ja-theme')]);
   assert.equal(t1[0], t1[1]); assert.ok(['dark', 'light'].includes(t1[0]));
+  await p.close();
+});
+
+test('answers screen: pending questions, answer-once flow, bank autosave, own Q&A', async () => {
+  const p = await ui.open(all, { route: 'answers' });
+  const t = await p.page.locator('#view').innerText();
+  assert.match(t, /Are you willing to work night shifts\?/); assert.match(t, /seen 3×/); assert.match(t, /choices: Yes · No/);
+  assert.match(await p.page.locator('#nav').innerText(), /Answers\s*2/);
+  // answer a pending question with Enter
+  await p.page.locator('[data-qasave="q1"]').fill('Yes'); await p.page.keyboard.press('Enter'); await p.page.waitForTimeout(150);
+  assert.deepEqual((await called(p.page, 'qa:save'))[0][1], { id: 'q1', answer: 'Yes' });
+  // a built-in question type: typing autosaves
+  await p.page.locator('[data-act="qatab"][data-k="all"]').click();
+  await p.page.locator('details.qgroup', { hasText: 'Address' }).locator('summary').click();
+  const pin = p.page.locator('[data-qabank="postal"]'); assert.equal(await pin.inputValue(), '600001');
+  await p.page.locator('[data-qabank="address"]').fill('12 Anna Salai'); await p.page.waitForTimeout(700);
+  assert.deepEqual((await called(p.page, 'qa:bank')).at(-1)[1], { id: 'address', answer: '12 Anna Salai' });
+  assert.equal(await p.page.locator('[data-qabank="notice_period"]').getAttribute('placeholder'), '30 days');   // derived default shown
+  // own Q&A tab: add + learned-from-Claude flagged for review
+  await p.page.locator('[data-act="qatab"][data-k="mine"]').click();
+  assert.match(await p.page.locator('#view').innerText(), /From Claude – please review/);
+  await p.page.locator('input[name="question"]').fill('Do you own a car?'); await p.page.locator('input[name="answer"]').fill('No'); await p.page.locator('[data-form="qaadd"] button').click(); await p.page.waitForTimeout(150);
+  assert.deepEqual((await called(p.page, 'qa:add'))[0][1], { question: 'Do you own a car?', answer: 'No' });
+  await p.page.locator('[data-qasave="q3"]').fill('No'); await p.page.locator('[data-qasave="q3"]').blur(); await p.page.waitForTimeout(150);
+  assert.deepEqual((await called(p.page, 'qa:save')).at(-1)[1], { id: 'q3', answer: 'No' });
+  await p.page.locator('[data-act="qadel"][data-id="q4"]').click(); await p.page.waitForTimeout(100);
+  assert.equal((await called(p.page, 'qa:delete'))[0][1], 'q4');
+  await p.close();
+});
+
+test('dry run is explained clearly; Rehearse / Watch buttons; settings toggles for watching and experimental sites', async () => {
+  const dry = { ...all, state: state({ settings: { ...all.state.settings, mode: 'dry', approval: false } }) };
+  let p = await ui.open(dry, { route: 'jobs', respond: { 'job:apply': { ok: true, app: { status: 'dry_run', reason: 'Form filled correctly – NOT submitted because Dry run is on' } } } });
+  const t = await p.page.locator('#view').innerText();
+  assert.match(t, /You are in Dry run/); assert.match(t, /does\s+not\s+submit/); assert.match(t, /Rehearse/);
+  await p.page.locator('[data-act="watchjob"][data-id="j1"]').click(); await p.page.waitForTimeout(100);
+  assert.equal((await called(p.page, 'job:watch'))[0][1], 'j1');
+  await p.page.locator('[data-act="applyjob"][data-id="j1"]').click(); await p.page.waitForTimeout(200);
+  assert.equal((await called(p.page, 'job:apply'))[0][1].mode, 'dry');
+  assert.match(await p.page.locator('#toast').innerText(), /not submitted|NOT submitted|Rehearsal/i);
+  await p.close();
+  p = await ui.open(all, { route: 'settings' });
+  assert.match(await p.page.locator('#view').innerText(), /Show the application window while it works/); assert.match(await p.page.locator('#view').innerText(), /sites the app was never tested on/);
+  await p.page.locator('[data-sb="showBrowser"]').evaluate((el) => { el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }); await p.page.waitForTimeout(500);
+  assert.deepEqual((await called(p.page, 'settings:save')).at(-1)[1], { showBrowser: true });
+  await p.close();
+  p = await ui.open(all, { route: 'jobs' });
+  assert.doesNotMatch(await p.page.locator('#view').innerText(), /You are in Dry run/);       // no banner in Live mode
   await p.close();
 });

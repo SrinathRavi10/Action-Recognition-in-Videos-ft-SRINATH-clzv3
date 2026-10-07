@@ -27,6 +27,8 @@ export function htmlToText(html) {
 
 export const titleCase = (s) => String(s || '').toLowerCase().replace(/(^|[\s\-'])([a-z])/g, (m, a, b) => a + b.toUpperCase());
 export const slugName = (s) => String(s || '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+/** "coimbatore, , India" → "Coimbatore, India" */
+export const cleanLocation = (v) => String(v || '').replace(/\s+/g, ' ').split(',').map((x) => x.trim()).filter(Boolean).map((x) => (x === x.toLowerCase() ? x.replace(/(^|[\s\-/(])([a-z])/g, (m, a, b) => a + b.toUpperCase()) : x)).join(', ');
 export const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9+#. ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** fetch JSON with timeout, retry on transient failures and a polite User-Agent. */

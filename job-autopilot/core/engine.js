@@ -1,18 +1,19 @@
 // The autopilot: poll job sources → score → apply (within limits) → record everything.
 import { EventEmitter } from 'node:events';
-import { ATS_SOURCES, remoteok, remotive, adzuna, resolveTarget } from './sources/index.js';
+import { ATS_SOURCES, remoteok, remotive, adzuna, resolveTarget, smartrecruitersDetail } from './sources/index.js';
 import { discover, companyFromUrl } from './companies.js';
 import { evaluate } from './match.js';
 import { applyToJob } from './apply.js';
-import { SUPPORTED_ATS, MANUAL_ATS } from './ats.js';
+import { SUPPORTED_ATS, MANUAL_ATS, canAutoApply, isForbiddenSite } from './ats.js';
 import { dupKey, pickWinner } from './quality.js';
 import { record as learnRecord } from './learn.js';
 import { followUps as dueFollowUps, followUpEmail } from './pipeline.js';
 import { fetchRecent, proposeUpdates } from './inbox.js';
+import { upsertQa } from './qbank.js';
 import { extractApplyEmail, sendApplication } from './email.js';
 import { coverLetter, interviewPrep } from './llm.js';
 import { missingForLive } from './profile.js';
-import { pool, sleep, jitter, uid, norm, today } from './util.js';
+import { pool, sleep, jitter, uid, norm, today, cleanLocation } from './util.js';
 
 const DAY = 864e5;
 const settingsSig = (s) => JSON.stringify([s.minScore, s.maxYearsRequired, s.includeInternships, s.locations, s.acceptAnywhereInIndia, s.acceptRemote, s.roles, s.excludeTitleWords]);
@@ -156,6 +157,7 @@ export class Engine extends EventEmitter {
     let fresh = 0, relevant = 0;
     const now = new Date().toISOString();
     for (const j of fetched) {
+      j.location = cleanLocation(j.location);
       const old = this.jobs[j.id];
       if (!old) {
         const ev = this.scoreJob(j);
@@ -167,11 +169,12 @@ export class Engine extends EventEmitter {
         this.jobs[j.id] = { ...old, ...j, firstSeen: old.firstSeen, lastSeen: now, eval: ev, evalSig: sig, status: old.status === 'skipped' && ev.decision !== 'skip' && !old.userSkipped ? 'new' : old.status };
       }
     }
+    await this.enrichDetails();
     const dups = this.markDuplicates();
     if (dups) relevant = Object.values(this.jobs).filter((x) => x.firstSeen === now && x.eval?.decision !== 'skip').length;
     // good matches on systems we cannot fill (SmartRecruiters, Workday…): tell the user instead of silently skipping them
     if (s.notifyManual !== false) for (const job of Object.values(this.jobs)) {
-      if (job.eval?.decision === 'apply' && (MANUAL_ATS.includes(job.ats) || job.manual) && job.status === 'new' && !job.notified) { job.notified = true; this.log('info', `Good match on a site I can't fill for you: ${job.company} – ${job.title}. Open it to apply.`); this.emit('manual', job); }
+      if (job.eval?.decision === 'apply' && !canAutoApply(job, this.settings) && job.status === 'new' && !job.notified) { job.notified = true; this.log('info', `Good match on a site I can't fill for you: ${job.company} – ${job.title}. Open it to apply.`); this.emit('manual', job); }
     }
     // postings that disappeared from boards we fetched successfully are closed
     const okBoards = new Set(companies.filter((c) => c.lastOk).map((c) => `${c.ats}:${c.token}`));
@@ -180,6 +183,17 @@ export class Engine extends EventEmitter {
     this.log('info', `Checked ${companies.length} boards: ${fetched.length} postings, ${fresh} new, ${relevant} worth a look`);
     this.emit('jobs');
     return { fetched: fetched.length, fresh, relevant };
+  }
+
+  /** Fetch the full text for relevant SmartRecruiters postings (their lists have none) and score them properly. */
+  async enrichDetails(limit = 40) {
+    const todo = Object.values(this.jobs).filter((j) => j.ats === 'smartrecruiters' && !j.detailed && j.eval && j.eval.decision !== 'skip' && ['new', 'queued'].includes(j.status)).slice(0, limit);
+    if (!todo.length) return;
+    await pool(todo, 4, async (j) => {
+      try { Object.assign(j, await smartrecruitersDetail(j, this.settings), { detailed: true }); } catch { j.detailed = true; }
+      j.eval = this.scoreJob(j); if (j.eval.decision === 'skip' && j.status === 'new') j.status = 'skipped';
+    });
+    this.store.save('jobs');
   }
 
   /** Re-score every known job (after the profile or targeting settings changed). */
@@ -223,7 +237,7 @@ export class Engine extends EventEmitter {
     if (live) { const miss = missingForLive(this.profile); if (miss.length) { this.log('warn', `Live mode paused – missing: ${miss.join(', ')}`); return { done: 0, blocked: 'profile' }; } }
     if (!this.inActiveHours()) { this.log('info', 'Outside active hours – not applying now'); return { done: 0 }; }
     const queue = Object.values(this.jobs)
-      .filter((j) => j.eval?.decision === 'apply' && !MANUAL_ATS.includes(j.ats) && !j.manual && (['new', 'queued'].includes(j.status) || (live && j.status === 'dry_run') || (j.status === 'awaiting' && !s.approval)))
+      .filter((j) => j.eval?.decision === 'apply' && canAutoApply(j, s) && (['new', 'queued'].includes(j.status) || (live && j.status === 'dry_run') || (j.status === 'awaiting' && !s.approval)))
       .sort((a, b) => b.eval.score - a.eval.score || String(b.postedAt).localeCompare(String(a.postedAt)));
     let done = 0, consecutiveFails = 0, queuedForApproval = 0;
     const captchas = {};
@@ -258,17 +272,17 @@ export class Engine extends EventEmitter {
     const client = this.makeClient(s);
     let result;
     const attempt = async () => {
-      if (SUPPORTED_ATS.includes(j.ats)) {
+      if (canAutoApply(j, s)) {
         let driver;
         try {
-          driver = await this.driverFactory();
-          return await applyToJob({ driver, job: j, profile: this.profile, settings: s, client, mode: useMode, step: (m) => this.log('debug', m), saveShot: (buf, tag) => this.saveShot(buf, tag, { job: j }) });
+          driver = await this.driverFactory({ visible: !!s.showBrowser });
+          return await applyToJob({ driver, job: { ...j, applyUrl: j.ats ? j.applyUrl : (j.resolvedUrl || j.applyUrl) }, profile: this.profile, settings: s, client, mode: useMode, step: (m) => this.log('debug', m), saveShot: (buf, tag) => this.saveShot(buf, tag, { job: j }) });
         } catch (e) { return { status: 'failed', reason: e.message, filled: [], missing: [] }; }
         finally { try { await driver?.close(); } catch {} }
       }
       const email = extractApplyEmail(j.description);
       if (email) return this.#emailApply(j, email, useMode, client);
-      return { status: 'needs_you', reason: `This site is not supported for auto-apply – open it and apply yourself${j.resolvedUrl ? ` (${new URL(j.resolvedUrl).hostname})` : ''}`, filled: [], missing: [] };
+      return { status: 'needs_you', reason: `${isForbiddenSite(j.resolvedUrl || j.applyUrl) ? 'This job site forbids automated applying (it bans accounts that use bots)' : 'The app cannot fill this site'} – open it and apply yourself${j.resolvedUrl ? ` (${new URL(j.resolvedUrl).hostname})` : ''}`, filled: [], missing: [] };
     };
     result = await attempt();
     if (result.status === 'failed') {   // one automatic retry with a fresh browser window (transient network / page errors)
@@ -277,6 +291,7 @@ export class Engine extends EventEmitter {
       const second = await attempt();
       result = second.status === 'failed' ? { ...second, reason: `${second.reason} (after a retry)` } : second;
     }
+    this.learnFrom(result, job);
     const rec = { id: uid(), jobId: job.id, company: job.company, title: job.title, location: job.location, url: j.url || job.url, applyUrl: result.url || j.applyUrl, ats: j.ats || null, score: job.eval?.score, mode: useMode, at: new Date().toISOString(), ...result, filled: (result.filled || []).slice(0, 40) };
     this.apps.push(rec); this.store.save('apps');
     const st = { applied: 'applied', emailed: 'applied', dry_run: 'dry-run done', unconfirmed: 'applied', needs_you: 'queued', closed: 'closed', failed: 'queued' }[rec.status];
@@ -285,6 +300,27 @@ export class Engine extends EventEmitter {
     this.log(rec.status === 'failed' ? 'error' : rec.status === 'needs_you' ? 'warn' : 'info', `${job.company} – ${job.title}: ${rec.status} – ${rec.reason}`);
     this.emit('app', rec);
     return rec;
+  }
+
+  /** Remember what we met on the form: questions we could not answer (pending), Claude's reusable answers, and which of your answers were used. */
+  learnFrom(result, job) {
+    const prof = this.profile; let changed = false;
+    const generic = (t) => { const c = String(job.company || '').trim(); return c.length > 2 ? String(t).replace(new RegExp(c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), '{company}') : t; };
+    for (const u of result.unanswered || []) { upsertQa(prof, { question: generic(u.label), kind: (u.options || []).some((o) => /^(yes|no)\b/i.test(o)) ? 'yesno' : u.type === 'number' ? 'number' : 'text', options: u.options, source: 'pending' }); changed = true; }
+    for (const l of result.learned || []) { upsertQa(prof, { question: l.question, answer: l.answer, kind: l.kind, options: l.options, source: 'claude' }); changed = true; }
+    for (const f of result.filled || []) if (f.qa && prof.qa) { const q = prof.qa.find((x) => x.id === f.qa); if (q) { q.uses = (q.uses || 0) + 1; q.lastUsed = new Date().toISOString(); changed = true; } }
+    if (changed) { this.store.save('profile'); this.emit('profile'); }
+  }
+  /** After you answered pending questions: put the applications that were waiting on them back in the queue. */
+  async retryWaiting() {
+    let n = 0;
+    for (const a of this.apps) {
+      if (a.status !== 'needs_you' || !(a.missing || []).some((m) => m.why === 'needs your answer')) continue;
+      const job = this.jobs[a.jobId]; if (!job) continue;
+      a.status = 'superseded'; job.status = 'queued'; n++;
+    }
+    if (n) { this.store.save('apps'); this.store.save('jobs'); this.emit('jobs'); if (this.running && !this.busy) this.tick({ apply: true }).catch((e) => this.log('error', e.message)); }
+    return n;
   }
 
   async #emailApply(job, to, mode, client) {
@@ -314,6 +350,32 @@ export class Engine extends EventEmitter {
       }
     } catch (e) { if (e.message !== 'closed') this.log('warn', `Assist ended: ${e.message}`); }
     try { await driver.close(); } catch {}
+    return { ok: true };
+  }
+
+  /**
+   * "Watch it fill": open the application in a visible window, let the app fill it (dry run – it does NOT submit), and leave the window
+   * open so you can see exactly what was typed and press Submit yourself. If you do, it is recorded as applied.
+   */
+  async watch(jobId) {
+    const job = this.jobs[jobId];
+    if (!job) return { ok: false, error: 'Job not found' };
+    let j = job;
+    if (!j.ats && j.applyUrl) j = await resolveTarget(j);
+    const driver = await this.driverFactory({ visible: true });
+    this.log('info', `Opening ${job.company} – ${job.title} so you can watch it being filled`);
+    try {
+      const r = await applyToJob({ driver, job: { ...j, applyUrl: j.ats ? j.applyUrl : (j.resolvedUrl || j.applyUrl) }, profile: this.profile, settings: this.settings, client: this.makeClient(this.settings), mode: 'dry', step: (m) => this.log('debug', m), saveShot: async () => '' });
+      this.learnFrom(r, job);
+      this.log(r.status === 'dry_run' ? 'info' : 'warn', `${job.company} – ${job.title}: ${r.status === 'dry_run' ? 'everything is filled – check it and press Submit yourself, or close the window' : r.reason}`);
+      const t0 = Date.now();
+      while (Date.now() - t0 < 20 * 60000) {
+        await this.sleep(2000);
+        const c = await driver.eval('window.__JA ? __JA.confirmation() : null').catch(() => { throw new Error('closed'); });
+        if (c?.done) { this.recordManual(jobId, 'Submitted by you while watching'); break; }
+      }
+    } catch (e) { if (e.message !== 'closed') this.log('warn', `Watch ended: ${e.message}`); }
+    try { await driver.close(); } catch { /* already closed */ }
     return { ok: true };
   }
 

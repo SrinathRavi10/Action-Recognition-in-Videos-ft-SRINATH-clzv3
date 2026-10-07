@@ -32,7 +32,7 @@ export async function startUi() {
             window.__calls.push([name, payload]);
             if (name in respond) return respond[name];
             switch (name) {
-              case 'state': return data.state; case 'jobs:list': return data.jobs; case 'apps:list': return data.apps; case 'companies:list': return data.companies; case 'log:list': return data.log; case 'health': return data.health; case 'insights': return data.insights;
+              case 'state': return data.state; case 'jobs:list': return data.jobs; case 'apps:list': return data.apps; case 'companies:list': return data.companies; case 'log:list': return data.log; case 'health': return data.health; case 'insights': return data.insights; case 'qa:state': return data.qa; case 'qa:save': return { ok: true, pending: 1 }; case 'qa:bank': return { ok: true, pending: 2 }; case 'qa:retry': return { ok: true, count: 1 };
               case 'job:detail': return { ...data.jobs.find((j) => j.id === payload), description: 'We are looking for a machine learning engineer.\nPython, PyTorch, NLP. 0-2 years of experience.' };
               case 'app:followup:draft': return { subject: 'Following up – application', body: 'Hello team,\n\nI applied last week…', to: '' };
               case 'app:prep': return { text: '## What the role needs\n- Python\n- PyTorch\n\n## Likely questions\n- Tell me about **a project**.', source: 'template' };

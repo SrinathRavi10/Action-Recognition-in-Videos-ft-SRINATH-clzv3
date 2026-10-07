@@ -107,3 +107,40 @@ test('manual “apply now” works for a single job and records a screenshot ref
   assert.match(rec.screenshot, /shot-confirmed/);
   assert.equal(engine.jobs[job.id].status, 'applied');
 });
+
+test('SmartRecruiters posting: found, description fetched, applied through the universal multi-step filler', async () => {
+  await fetch(`${mock.url}/__reset`);
+  const { engine, store } = setup({ sources: { greenhouse: false, lever: false, ashby: false, workable: false, smartrecruiters: true, remoteok: false, remotive: false, adzuna: false } });
+  store.set('companies', [{ ats: 'smartrecruiters', token: 'mockco', enabled: true }]);
+  store.get('profile').summary = 'ML engineer with a year of experience building NLP and churn models.';
+  const r = await engine.tick();
+  assert.equal(r.fetched, 1);
+  const job = Object.values(engine.jobs)[0];
+  assert.equal(job.detailed, true); assert.match(job.description, /PyTorch/);
+  assert.equal(job.eval.decision, 'apply');
+  assert.equal(engine.apps.at(-1).status, 'applied', JSON.stringify(engine.apps.at(-1)));
+  const s = mock.submissions.at(-1);
+  assert.equal(s.kind, 'smartrecruiters'); assert.equal(s.fields.firstName, 'Jane'); assert.equal(s.fields.notice, '30 days'); assert.equal(s.files.resume.filename, 'Jane_Role_Resume.pdf');
+});
+
+test('a form with an unanswerable question is remembered as pending; after you answer it, "retry" completes the application', async () => {
+  await fetch(`${mock.url}/__reset`);
+  const { engine, store } = setup({ sources: { greenhouse: true, lever: false, ashby: false, workable: false, smartrecruiters: false, remoteok: false, remotive: false, adzuna: false }, maxPerCompany: 10 });
+  store.set('companies', [{ ats: 'greenhouse', token: 'mockco', enabled: true }]);
+  await engine.tick();
+  const waiting = engine.apps.find((a) => a.status === 'needs_you' && /Why do you want to work/.test(a.reason));
+  assert.ok(waiting, 'Data Scientist form needs an answer');
+  const pend = store.get('profile').qa.filter((q) => q.source === 'pending');
+  assert.equal(pend.length, 1); assert.match(pend[0].question, /Why do you want to work at \{company\}\?/);   // stored without the company name so it is reusable
+  const subsBefore = mock.submissions.length;
+  // you answer once (with a {company} placeholder) …
+  pend[0].answer = 'I like how {company} applies NLP to real problems.'; pend[0].source = 'you';
+  assert.equal(await engine.retryWaiting(), 1);
+  await new Promise((r) => setTimeout(r, 100));
+  while (engine.busy) await new Promise((r) => setTimeout(r, 100));
+  const done = engine.apps.filter((a) => a.status === 'applied' && a.title === 'Data Scientist');
+  assert.equal(done.length, 1, JSON.stringify(engine.apps.map((a) => [a.title, a.status, a.reason])));
+  assert.equal(mock.submissions.length, subsBefore + 1);
+  assert.match(mock.submissions.at(-1).fields.q_why, /I like how Mockco applies NLP/);
+  assert.equal(store.get('profile').qa[0].uses >= 1, true);                // the answer was counted as used
+});

@@ -6,12 +6,12 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const call = (n, p) => api.call(n, p);
 
-const S = { server: null, jobs: [], apps: [], companies: [], log: [], health: {}, insights: null, route: 'today', jobFilter: 'matches', jobSort: 'score', jobQ: '', appFilter: 'all', pipeView: 'board', busy: new Set(), drawer: null };
+const S = { server: null, jobs: [], apps: [], companies: [], log: [], health: {}, insights: null, qa: null, qaTab: 'todo', qaQ: '', route: 'today', jobFilter: 'matches', jobSort: 'score', jobQ: '', appFilter: 'all', pipeView: 'board', busy: new Set(), drawer: null };
 
 const ROUTES = [
   ['today', 'Today', 'zap', 'Work'], ['jobs', 'Jobs', 'briefcase'], ['approvals', 'Approvals', 'check'], ['needs', 'Needs you', 'alert'],
   ['pipeline', 'Pipeline', 'send', 'Track'], ['insights', 'Insights', 'pie'],
-  ['profile', 'Profile', 'user', 'Set up'], ['sources', 'Sources', 'building'], ['settings', 'Settings', 'sliders'], ['activity', 'Activity', 'activity'],
+  ['profile', 'Profile', 'user', 'Set up'], ['answers', 'Answers', 'edit'], ['sources', 'Sources', 'building'], ['settings', 'Settings', 'sliders'], ['activity', 'Activity', 'activity'],
 ];
 const PIPE = [['applied', 'Applied', 'send', 's1'], ['replied', 'Heard back', 'mail', 's4'], ['interview', 'Interview', 'calendar', 's3'], ['offer', 'Offer', 'sparkle', 's6'], ['rejected', 'Closed', 'x', 's0']];
 const DONE = ['applied', 'unconfirmed', 'emailed'];
@@ -56,12 +56,13 @@ async function loadState() { S.server = await call('state'); }
 async function loadLists() {
   [S.jobs, S.apps, S.companies, S.log, S.health] = await Promise.all([call('jobs:list'), call('apps:list'), call('companies:list'), call('log:list'), call('health')]);
   if (S.route === 'insights') S.insights = await call('insights');
+  if (S.route === 'answers') S.qa = await call('qa:state');
 }
 
 // ───────── shell ─────────
 function shell() {
   const c = S.server?.counts || {};
-  const badge = { needs: c.needsYou, approvals: c.awaiting, pipeline: c.followUps };
+  const badge = { needs: c.needsYou, approvals: c.awaiting, pipeline: c.followUps, answers: c.pendingQa };
   let last = '';
   $('#nav').innerHTML = ROUTES.map(([k, l, ic, grp]) => { const g = grp && grp !== last ? `<div class="navgroup">${grp}</div>` : ''; if (grp) last = grp; const n = badge[k]; return `${g}<a href="#/${k}" data-route="${k}" class="${S.route === k ? 'on' : ''}">${icon(ic, 20)}<span>${l}</span>${n ? `<em class="badge ${k === 'pipeline' ? 'soft' : ''}" style="font-style:normal">${n}</em>` : ''}</a>`; }).join('');
   $('#pill').innerHTML = `${icon('shield', 16)}<span class="lbl">${S.server?.encrypted ? 'Keys encrypted on this PC' : 'Data stays on this PC'}</span>`;
@@ -78,7 +79,7 @@ try { const t = localStorage.getItem('ja-theme'); if (t) document.documentElemen
 function render() {
   if (!S.server) return;
   shell();
-  const v = { today, jobs, approvals, needs, pipeline, insights, profile, sources, settings, activity }[S.route] || today;
+  const v = { today, jobs, approvals, needs, pipeline, insights, profile, answers, sources, settings, activity }[S.route] || today;
   const y = scrollY;
   $('#view').innerHTML = (isLive() && !['settings', 'today'].includes(S.route) ? `<div class="livebar">${icon('alert', 18)} LIVE mode – applications are really being submitted.</div>` : '') + v();
   if (S.route === 'jobs') bindJobs();
@@ -139,7 +140,7 @@ function today() {
       <div class="hero-stat"><small>${icon('alert', 14)} Needs you</small><b>${c.needsYou}</b></div></div>
   </section>
   ${attention()}${getReady()}
-  ${!live && c.dryRuns ? `<div class="alert good">${icon('check', 18)}<div><b>${c.dryRuns} application${c.dryRuns === 1 ? '' : 's'} rehearsed</b><span>Open <a href="#/applications">History</a>, look at the screenshots, and when the forms look right switch to <b>Live</b>.</span></div></div>` : ''}
+  ${!live && c.dryRuns ? `<div class="alert good">${icon('check', 18)}<div><b>${c.dryRuns} application${c.dryRuns === 1 ? '' : 's'} rehearsed</b><span>Open <a href="#/applications">History</a>, look at the screenshots, and when the forms look right switch to <strong>Live</strong>.</span></div></div>` : ''}
   <section class="grid2" style="margin-top:16px">
     <div class="card"><div class="card-head"><h2>${icon('activity', 18)} Recent activity</h2><a href="#/activity">All →</a></div>${feed(S.log.filter((l) => l.level !== 'debug').slice(-9).reverse())}</div>
     <div class="card"><div class="card-head"><h2>${icon('send', 18)} Last 14 days</h2></div><div class="bars14">${days.map(([d, n]) => `<div title="${d}: ${n}"><span class="b ${live ? '' : 'dry'}" style="height:${(n / max) * 100}%"></span><small>${d.slice(8)}</small></div>`).join('')}</div>
@@ -156,7 +157,7 @@ function jobRow(j) {
   const apply = j.manual
     ? `<button class="btn small primary" data-act="openjob" data-id="${esc(j.id)}">${icon('external', 14)} Open to apply</button>${done ? '' : `<button class="btn small" data-act="manualdone" data-id="${esc(j.id)}" title="Record that you applied">${icon('check', 14)} I applied</button>`}`
     : done ? '' : j.status === 'awaiting' ? `<a class="btn small primary" href="#/approvals">Review</a>`
-    : `<button class="btn small primary" data-act="applyjob" data-id="${esc(j.id)}" ${S.busy.has(j.id) ? 'disabled' : ''}>${S.busy.has(j.id) ? '<span class="spin"></span>' : icon('send', 14)} Apply now</button>`;
+    : `<button class="btn small primary" data-act="applyjob" data-id="${esc(j.id)}" ${S.busy.has(j.id) ? 'disabled' : ''} title="${isLive() ? 'Fill the form and submit it' : 'Dry run is on: fills the form but does NOT submit'}">${S.busy.has(j.id) ? '<span class="spin"></span>' : icon(isLive() ? 'send' : 'eye', 14)} ${isLive() ? 'Apply now' : 'Rehearse'}</button><button class="btn small" data-act="watchjob" data-id="${esc(j.id)}" title="Open the application in a window you can see">${icon('eye', 14)} Watch</button>`;
   return `<div class="job" data-job="${esc(j.id)}">${ring(j.score)}
     <div><h3>${esc(j.title)}</h3><div class="meta"><span>${icon('building', 14)}${esc(j.company)}</span><span>${icon('pin', 14)}${esc(j.location || 'Location not stated')}</span>${j.postedAt ? `<span>${icon('clock', 14)}${ago(j.postedAt)}</span>` : ''}<span class="chip">${esc(j.ats || j.source)}</span>${salaryChip(j)}${j.manual ? `<span class="chip warn">${icon('external', 12)}Apply yourself</span>` : ''}</div>
       <div class="why">${j.reasons.slice(0, 3).map((r) => `<span class="chip tag">${esc(r)}</span>`).join('')}${j.skipReason ? `<span class="chip">${esc(j.skipReason)}</span>` : ''}</div></div>
@@ -170,10 +171,13 @@ function filteredJobs() {
   const list = S.jobs.filter((j) => (f === 'matches' ? j.decision === 'apply' && ['new', 'queued', 'dry_run', 'needs_you', 'awaiting'].includes(j.status) : f === 'maybe' ? j.decision === 'maybe' && j.status === 'new' : f === 'manual' ? j.manual && j.decision !== 'skip' && j.status !== 'applied' : f === 'applied' ? j.status === 'applied' : f === 'skipped' ? j.status === 'skipped' : true) && (!q || `${j.title} ${j.company} ${j.location}`.toLowerCase().includes(q)));
   return list.sort(S.jobSort === 'new' ? (a, b) => String(b.postedAt || b.firstSeen).localeCompare(String(a.postedAt || a.firstSeen)) : S.jobSort === 'pay' ? (a, b) => (b.salary?.max || 0) - (a.salary?.max || 0) : (a, b) => b.score - a.score || String(b.postedAt).localeCompare(String(a.postedAt)));
 }
+function dryBanner() {
+  return isLive() ? '' : `<div class="alert info">${icon('eye', 18)}<div style="flex:1"><b>You are in Dry run</b><span>The app fills forms in a hidden window but does <strong>not</strong> submit them – that is on purpose, so you can check first. Press <strong>Watch</strong> on any job to see it being filled in a visible window. When you are happy, switch to <strong>Live</strong> on the Today page and it will submit by itself.</span></div><a class="btn small primary" href="#/today">Go to Live…</a></div>`;
+}
 function jobs() {
   const list = filteredJobs();
   const tabs = [['matches', 'Matches'], ['maybe', 'Maybe'], ['manual', 'Apply yourself'], ['applied', 'Applied'], ['skipped', 'Skipped'], ['all', 'All']];
-  return `<div class="page-head"><div><h1>Jobs</h1><p>${S.jobs.length.toLocaleString()} postings scored against your resume. <span class="faint">Use ♥ and ✕ to teach it what you like.</span></p></div></div>
+  return `${dryBanner()}<div class="page-head"><div><h1>Jobs</h1><p>${S.jobs.length.toLocaleString()} postings scored against your resume. <span class="faint">Use ♥ and ✕ to teach it what you like.</span></p></div></div>
   <div class="row between wrap" style="margin-bottom:14px;gap:10px"><nav class="tabs" style="margin:0">${tabs.map(([k, l]) => `<button class="${S.jobFilter === k ? 'on' : ''}" data-act="jobtab" data-k="${k}">${l}</button>`).join('')}</nav>
     <div class="row gap"><select id="jobsort" aria-label="Sort"><option value="score" ${S.jobSort === 'score' ? 'selected' : ''}>Best match</option><option value="new" ${S.jobSort === 'new' ? 'selected' : ''}>Newest</option><option value="pay" ${S.jobSort === 'pay' ? 'selected' : ''}>Highest pay</option></select>
     <input class="input" id="jobq" placeholder="Search title, company, city…  ( / )" value="${esc(S.jobQ)}" style="min-width:260px"></div></div>
@@ -185,13 +189,13 @@ function bindJobs() { const q = $('#jobq'); if (q) q.oninput = () => { S.jobQ = 
 function approvals() {
   const list = S.jobs.filter((j) => j.status === 'awaiting').sort((a, b) => b.score - a.score);
   const on = S.server.settings.approval;
-  return `<div class="page-head"><div><h1>Approvals</h1><p>In approval mode the autopilot finds and prepares jobs, but <b>nothing is sent until you say so</b>.</p></div>
+  return `${dryBanner()}<div class="page-head"><div><h1>Approvals</h1><p>In approval mode the autopilot finds and prepares jobs, but <b>nothing is sent until you say so</b>.</p></div>
     <div class="row gap"><label class="check"><span class="switch"><input type="checkbox" data-sb="approval" ${on ? 'checked' : ''}><i></i></span> Ask me before applying</label>${list.length > 1 ? `<button class="btn primary" data-act="approveall">${icon('check', 16)} Approve all ${list.length}</button>` : ''}</div></div>
   ${!on ? `<div class="alert info">${icon('info', 18)}<div><b>Approval mode is off</b><span>The autopilot applies by itself in Live mode. Turn the switch on if you'd rather review each application first. (Dry runs never need approval – nothing is sent.)</span></div></div>` : ''}
   ${list.map((j) => `<section class="card approval" data-job="${esc(j.id)}"><div class="row gap" style="align-items:flex-start">${ring(j.score, 56)}
     <div class="grow"><h2 style="font-size:1.12rem">${esc(j.title)}</h2><div class="meta muted small row gap wrap" style="margin-top:4px"><span>${icon('building', 14)} ${esc(j.company)}</span><span>${icon('pin', 14)} ${esc(j.location || 'Location not stated')}</span>${j.postedAt ? `<span>${icon('clock', 14)} ${ago(j.postedAt)}</span>` : ''}<span class="chip">${esc(j.ats || j.source)}</span>${salaryChip(j)}</div>
     <div class="why" style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">${j.reasons.map((r) => `<span class="chip tag">${esc(r)}</span>`).join('')}</div></div></div>
-    <div class="row gap wrap end" style="margin-top:16px"><button class="btn ghost" data-act="detail" data-id="${esc(j.id)}">${icon('eye', 16)} Posting</button><button class="btn" data-act="coverpreview" data-id="${esc(j.id)}">${icon('mail', 16)} Cover letter</button><button class="btn" data-act="skipjob" data-id="${esc(j.id)}">${icon('x', 16)} Reject</button><button class="btn primary" data-act="approve" data-id="${esc(j.id)}" ${S.busy.has(j.id) ? 'disabled' : ''}>${S.busy.has(j.id) ? '<span class="spin"></span>' : icon('check', 16)} Approve &amp; apply</button></div></section>`).join('') || `<div class="card"><div class="empty">${icon('check', 34)}<b>Nothing waiting</b><span>${on ? 'New matches will appear here while the autopilot is running in Live mode.' : 'Switch approval mode on to review applications before they are sent.'}</span></div></div>`}`;
+    <div class="row gap wrap end" style="margin-top:16px"><button class="btn ghost" data-act="detail" data-id="${esc(j.id)}">${icon('eye', 16)} Posting</button><button class="btn" data-act="watchjob" data-id="${esc(j.id)}">${icon('eye', 16)} Watch it fill</button><button class="btn" data-act="coverpreview" data-id="${esc(j.id)}">${icon('mail', 16)} Cover letter</button><button class="btn" data-act="skipjob" data-id="${esc(j.id)}">${icon('x', 16)} Reject</button><button class="btn primary" data-act="approve" data-id="${esc(j.id)}" ${S.busy.has(j.id) ? 'disabled' : ''}>${S.busy.has(j.id) ? '<span class="spin"></span>' : icon('check', 16)} Approve &amp; apply</button></div></section>`).join('') || `<div class="card"><div class="empty">${icon('check', 34)}<b>Nothing waiting</b><span>${on ? 'New matches will appear here while the autopilot is running in Live mode.' : 'Switch approval mode on to review applications before they are sent.'}</span></div></div>`}`;
 }
 
 // ───────── Pipeline & history ─────────
@@ -331,6 +335,40 @@ function insights() {
   <div class="card"><div class="card-head"><h2>${icon('cpu', 18)} Skills employers ask for in your matches</h2></div>${I.topSkills.length ? `<ul class="hbars">${I.topSkills.map((k, i) => `<li><span class="hb-name">${esc(k.name)}</span><span class="hb-track"><span class="hb-fill" style="width:${(k.n / I.topSkills[0].n) * 100}%;background:var(--s1)"></span></span><span class="hb-val">${k.n}</span></li>`).join('')}</ul>` : '<p class="muted">Appears after the first scan.</p>'}</div>`;
 }
 
+// ───────── Answers (the answer bank) ─────────
+const SRC = { you: ['You', 'good'], learned: ['Learned', 'info'], claude: ['From Claude – please review', 'warn'], pending: ['Needs your answer', 'bad'] };
+function answers() {
+  const Q = S.qa;
+  if (!Q) return `<div class="page-head"><div><h1>Answers</h1></div></div><div class="card"><div class="skeleton" style="height:140px"></div></div>`;
+  const q = S.qaQ.toLowerCase(), tab = S.qaTab;
+  const pend = Q.qa.filter((x) => x.source === 'pending' && !x.answer);
+  const todo = Q.catalog.filter((c) => c.status === 'empty');
+  const mine = Q.qa.filter((x) => x.source !== 'pending' || x.answer);
+  const waiting = S.apps.filter((a) => a.status === 'needs_you' && (a.missing || []).some((m) => m.why === 'needs your answer')).length;
+  const match = (t) => !q || t.toLowerCase().includes(q);
+  const row = (c) => `<div class="qrow ${c.status}"><div class="qt"><b>${esc(c.title)}</b>${c.hint ? `<span class="faint xs">${esc(c.hint)}</span>` : ''}</div>
+    ${c.kind === 'long' ? `<textarea class="input" rows="3" data-qabank="${c.id}" placeholder="${esc(c.fallback || 'Write it once – use {company} and {role} if you like')}">${esc(c.yours)}</textarea>` : `<input class="input" data-qabank="${c.id}" value="${esc(c.yours)}" placeholder="${esc(c.fallback || (c.status === 'declined' ? 'Declined by default' : 'Your answer'))}">`}
+    <span class="chip ${c.status === 'yours' ? 'good' : c.status === 'empty' ? 'warn' : c.status === 'declined' ? 'info' : ''}">${{ yours: 'Yours', default: 'From profile', empty: 'Needs answer', declined: 'Declined', optional: 'Optional' }[c.status]}</span></div>`;
+  const groups = Q.groups.map((g) => { const items = Q.catalog.filter((c) => c.group === g && (tab === 'all' ? true : c.status === 'empty') && (match(c.title) || match(c.yours) || match(c.fallback))); if (!items.length) return ''; return `<details class="qgroup" ${tab === 'todo' || q ? 'open' : ''}><summary>${esc(g)} <span class="chip">${items.length}</span></summary>${items.map(row).join('')}</details>`; }).join('');
+  return `<div class="page-head"><div><h1>Answers</h1><p>Application forms ask hundreds of different questions. Answer them <b>here, once</b> – the app uses these on every application, even when the wording changes, and it remembers new questions it meets.</p></div>
+    <div class="row gap">${waiting ? `<button class="btn primary" data-act="qaretry">${icon('refresh', 16)} Retry ${waiting} waiting application${waiting === 1 ? '' : 's'}</button>` : ''}</div></div>
+  <div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="kpi ${pend.length ? 'bad' : ''}"><div class="kpi-head">${icon('alert', 16)} New questions</div><div class="kpi-value">${pend.length}</div><div class="kpi-sub">seen in forms, not answered yet</div></div>
+    <div class="kpi"><div class="kpi-head">${icon('edit', 16)} Question types to fill</div><div class="kpi-value">${todo.length}</div><div class="kpi-sub">of ${Q.catalog.length} built-in</div></div>
+    <div class="kpi"><div class="kpi-head">${icon('check', 16)} Your own Q&amp;A</div><div class="kpi-value">${mine.length}</div><div class="kpi-sub">${mine.filter((x) => x.source === 'claude').length} from Claude to review</div></div>
+    <div class="kpi"><div class="kpi-head">${icon('zap', 16)} Times reused</div><div class="kpi-value">${Q.qa.reduce((n, x) => n + (x.uses || 0), 0)}</div><div class="kpi-sub">in applications so far</div></div></div>
+  <div class="row between wrap" style="margin-bottom:14px;gap:10px"><nav class="tabs" style="margin:0">${[['todo', `To do (${pend.length + todo.length})`], ['mine', `Your Q&A (${mine.length})`], ['all', `All question types (${Q.catalog.length})`]].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="qatab" data-k="${k}">${l}</button>`).join('')}</nav>
+    <input class="input" id="qaq" placeholder="Search questions…" value="${esc(S.qaQ)}" style="min-width:260px"></div>
+  ${tab === 'todo' && pend.length ? `<section class="card"><div class="card-head"><h2>${icon('alert', 18)} New questions from real forms</h2><span class="chip bad">${pend.length}</span></div><p class="muted small" style="margin-top:0">These appeared on applications and had no answer. Fill them in and the waiting applications are retried.</p>
+    ${pend.filter((x) => match(x.question)).map((x) => `<div class="qrow pending"><div class="qt"><b>${esc(x.question)}</b><span class="faint xs">${x.seen > 1 ? `seen ${x.seen}× · ` : ''}${x.options?.length ? 'choices: ' + esc(x.options.slice(0, 6).join(' · ')) : esc(x.kind || 'text')}</span></div>
+      <div class="row gap grow"><input class="input grow" data-qasave="${x.id}" placeholder="${x.options?.length ? 'Type one of the choices (or what you would pick)' : 'Your answer'}" list="opts-${x.id}">${x.options?.length ? `<datalist id="opts-${x.id}">${x.options.map((o) => `<option value="${esc(o)}">`).join('')}</datalist>` : ''}<button class="btn small primary" data-act="qasaveone" data-id="${x.id}">Save</button><button class="icon" data-act="qadel" data-id="${x.id}" title="Ignore this question" aria-label="Ignore">${icon('x', 16)}</button></div></div>`).join('')}</section>` : ''}
+  ${tab === 'mine' ? `<section class="card"><div class="card-head"><h2>${icon('edit', 18)} Your questions &amp; answers</h2></div>
+    <form class="qadd row gap wrap" data-form="qaadd"><input class="input grow" name="question" placeholder="A question (any wording), e.g. Are you comfortable with night shifts?" required><input class="input grow" name="answer" placeholder="Your answer, e.g. Yes" required><button class="btn primary">${icon('plus', 16)} Add</button></form>
+    ${mine.filter((x) => match(x.question) || match(x.answer)).map((x) => `<div class="qrow ${x.source}"><div class="qt"><input class="input" data-qaedit="${x.id}" value="${esc(x.question)}" aria-label="Question"><span class="faint xs">${(SRC[x.source] || [x.source])[0]}${x.uses ? ` · used ${x.uses}×` : ''}${x.options?.length ? ' · choices: ' + esc(x.options.slice(0, 4).join(' · ')) : ''}</span></div>
+      <input class="input" data-qasave="${x.id}" value="${esc(x.answer)}" aria-label="Answer"><span class="chip ${(SRC[x.source] || [0, ''])[1]}">${(SRC[x.source] || [x.source])[0]}</span><button class="icon" data-act="qadel" data-id="${x.id}" aria-label="Delete">${icon('trash', 16)}</button></div>`).join('') || `<div class="empty">${icon('edit', 30)}<span>Nothing yet. Add a question above, or answer new questions as the app meets them.</span></div>`}</section>` : ''}
+  ${tab !== 'mine' ? (groups || `<div class="card"><div class="empty">${icon('check', 34)}<b>${tab === 'todo' ? 'Everything is answered' : 'No matches'}</b><span>${tab === 'todo' ? 'The app has an answer for every question type it knows. New ones appear above as it meets them.' : ''}</span></div></div>`) : ''}
+  <p class="muted small">Sensitive questions (gender, religion, caste, disability…) are <b>declined by default</b>; Aadhaar / PAN / bank details are <b>never</b> filled. {company} and {role} in a long answer are replaced with the real company and job title.</p>`;
+}
+
 // ───────── Profile ─────────
 const tagBox = (id, items, ph) => `<div class="tagbox" data-tagbox="${id}">${items.map((t, i) => `<span class="chip tag">${esc(t)}<button data-rm="${i}" aria-label="Remove">×</button></span>`).join('')}<input placeholder="${esc(ph)}" aria-label="${esc(ph)}"></div>`;
 function profile() {
@@ -342,6 +380,7 @@ function profile() {
     ${p.hasResume ? `<div class="row between wrap"><div><b>${esc(p.resumeName)}</b><div class="muted small">Read ${p.skills.length} skills · about ${p.experienceYears} year(s) of experience</div></div><button class="btn" data-act="resume">${icon('upload', 16)} Replace resume</button></div>` : `<div class="dropzone" id="drop"><b>Drop your resume PDF here</b><div class="muted small">or click to choose a file</div></div>`}</section>
   <section class="card"><div class="card-head"><h2>${icon('check', 18)} Ready to go live?</h2></div>
     <ul class="steps">${[['Resume uploaded', p.hasResume], ['Name, email and phone', !!(p.firstName && p.lastName && p.email && p.phone)], ['Notice period answered', !!a.noticePeriod], ['Expected salary (CTC) answered', !!a.expectedCtc]].map(([l, ok]) => `<li class="${ok ? 'ok' : ''}">${icon(ok ? 'check' : 'info', 18)}${l}</li>`).join('')}</ul></section>
+  <section class="card"><div class="card-head"><h2>${icon('edit', 18)} Application questions</h2><a class="btn small primary" href="#/answers">Open Answers →</a></div><p class="muted" style="margin:0">Forms ask hundreds of different things (shifts, work mode, address, 10th/12th %, languages, “why us?”…). The <b>Answers</b> screen holds a ready-made list of 100+ question types – answer them once and every application uses them, even when the wording changes.${S.server.counts.pendingQa ? ` <span class="chip bad">${S.server.counts.pendingQa} new question${S.server.counts.pendingQa === 1 ? '' : 's'} waiting</span>` : ''}</p></section>
   <section class="card"><div class="card-head"><h2>${icon('user', 18)} About you</h2></div><div class="fields">${f('firstName', 'First name')}${f('lastName', 'Last name')}${f('email', 'Email')}${f('phone', 'Phone (10 digits)')}${f('city', 'Current city')}${f('linkedin', 'LinkedIn')}${f('github', 'GitHub')}${f('website', 'Portfolio / website')}${f('currentCompany', 'Current company')}${f('currentTitle', 'Current job title')}${f('headline', 'Headline')}
     <label class="field"><span>Years of experience</span><input class="input" data-p="experienceYears" data-num="1" value="${esc(p.experienceYears)}" inputmode="decimal"><small>Used to match jobs and to answer “years of experience” questions.</small></label></div></section>
   <section class="card"><div class="card-head"><h2>${icon('cpu', 18)} Skills</h2></div>${tagBox('skills', p.skills, 'Add a skill and press Enter')}<p class="muted small">Matching and answers only use skills listed here – nothing else is ever claimed.</p></section>
@@ -378,6 +417,8 @@ function settings() {
     <h4 style="margin:16px 0 6px">Never apply if the title contains</h4>${tagBox('excludeTitleWords', s.excludeTitleWords, 'Add a word')}</section>
   <section class="card"><div class="card-head"><h2>${icon('shield', 18)} Safety &amp; quality</h2></div>
     <div class="stack"><label class="check"><span class="switch"><input type="checkbox" data-sb="approval" ${s.approval ? 'checked' : ''}><i></i></span> Ask me before applying in Live mode <span class="muted small">(queues applications under Approvals)</span></label>
+    <label class="check"><span class="switch"><input type="checkbox" data-sb="showBrowser" ${s.showBrowser ? 'checked' : ''}><i></i></span> Show the application window while it works <span class="muted small">(so you can watch every field being filled)</span></label>
+    <label class="check"><span class="switch"><input type="checkbox" data-sb="tryExperimental" ${s.tryExperimental ? 'checked' : ''}><i></i></span> Also try sites the app was never tested on <span class="muted small">(SmartRecruiters and other employer career pages – anything unclear goes to Needs you)</span></label>
     <label class="check"><span class="switch"><input type="checkbox" data-sb="notifyManual" ${s.notifyManual ? 'checked' : ''}><i></i></span> Tell me about good matches on sites the app can't fill (SmartRecruiters, Workday…)</label></div>
     <div class="fields" style="margin-top:14px">${num('maxAgeDays', 'Ignore postings older than (days)', 'Old postings are usually filled or fake.')}${num('followUpDays', 'Suggest a follow-up after (days)', 'If nobody has replied.')}</div></section>
   <section class="card"><div class="card-head"><h2>${icon('clock', 18)} Pace &amp; limits</h2></div><div class="fields">${num('pollMinutes', 'Check for new jobs every (minutes)')}${num('maxPerDay', 'Max applications per day')}${num('maxPerCompany', 'Max per company (60 days)')}
@@ -406,8 +447,9 @@ function activity() {
 
 // ───────── events ─────────
 const setPath = (o, path, v) => { const ks = path.split('.'); let t = o; ks.slice(0, -1).forEach((k) => (t = t[k] ||= {})); t[ks.at(-1)] = v; };
-let saveT;
-const saveSettingsSoon = (over) => { clearTimeout(saveT); saveT = setTimeout(async () => { S.server.settings = await call('settings:save', over); }, 350); };
+let saveTimer;
+const saveT = {};
+const saveSettingsSoon = (over) => { clearTimeout(saveTimer); saveTimer = setTimeout(async () => { S.server.settings = await call('settings:save', over); }, 350); };
 const saveProfileSoon = (p) => { clearTimeout(saveProfileSoon.t); saveProfileSoon.t = setTimeout(async () => { const r = await call('profile:save', p); S.server.profile = r; S.server.missing = (await call('state')).missing; }, 350); };
 
 document.addEventListener('click', async (e) => {
@@ -431,9 +473,10 @@ document.addEventListener('click', async (e) => {
       const live = isLive();
       if (live && !(await modal({ title: 'Apply now?', body: `<p>This submits a real application.</p>`, buttons: [{ label: 'Cancel', value: false }, { label: 'Apply', value: true, primary: true }] }))) return;
       S.busy.add(id); render(); const r = await call('job:apply', { id, mode: S.server.settings.mode }); S.busy.delete(id);
-      toast(r.ok ? `${r.app.status === 'dry_run' ? 'Dry run done' : r.app.status}: ${r.app.reason}` : r.error); await refresh();
+      toast(r.ok ? (r.app.status === 'dry_run' ? `Rehearsal done: ${r.app.reason}. Switch to Live to really submit.` : `${r.app.status === 'applied' ? 'Applied ✓' : r.app.status}: ${r.app.reason}`) : r.error, 9000); await refresh();
     },
     skipjob: async () => { await call('job:skip', id); toast('Skipped – I’ll show fewer jobs like this.', 2500); await refresh(); },
+    watchjob: async () => { toast('Opening a window so you can watch…', 3500); await call('job:watch', id); },
     likejob: async () => { await call('job:feedback', { id, verdict: 'up' }); toast('Noted – more jobs like this will score higher.', 2500); await refresh(); },
     openjob: () => { const j = S.jobs.find((x) => x.id === id); if (j) call('open:url', j.url); },
     manualdone: async () => { await call('job:manualApplied', id); toast('Recorded in your pipeline ✓'); await refresh(); },
@@ -451,6 +494,10 @@ document.addEventListener('click', async (e) => {
       await call('answer:save', { match: m.label, answer: v }); toast('Saved – retrying the application…'); const x = await call('app:retry', id); toast(x.app ? `Result: ${x.app.status} – ${x.app.reason}` : 'Retried', 7000); await refresh();
     },
     pipeview: () => { S.pipeView = el.dataset.k; render(); },
+    qatab: () => { S.qaTab = el.dataset.k; render(); },
+    qasaveone: async () => { const inp = $(`[data-qasave="${id}"]`); const v = inp.value.trim(); if (!v) return toast('Type your answer first'); await saveQa(id, v); },
+    qadel: async () => { await call('qa:delete', id); await refresh(); },
+    qaretry: async () => { const r = await call('qa:retry'); toast(r.count ? `Retrying ${r.count} application${r.count === 1 ? '' : 's'}…` : 'Nothing was waiting on an answer'); await refresh(); },
     pdetail: () => pipeDetail(id),
     followdraft: () => followModal(id),
     snooze: async () => { await call('app:snooze', id); toast('Snoozed for 5 days'); await refresh(); },
@@ -471,10 +518,17 @@ document.addEventListener('click', async (e) => {
   };
   if (A[act]) A[act]();
 });
+async function saveQa(id, answer) {
+  const r = await call('qa:save', { id, answer });
+  await refresh();
+  if (r.ok && r.pending === 0) { const n = await call('qa:retry'); toast(n.count ? `Saved – retrying ${n.count} waiting application${n.count === 1 ? '' : 's'}…` : 'Saved ✓', 4500); } else toast('Saved ✓', 2000);
+}
 async function afterResume(r) { if (r?.canceled) return; if (!r?.ok) return toast(r?.error || 'Could not read that file', 7000); toast(`Resume read ✓ – ${r.profile.skills.length} skills found. Please check your details.`); await refresh(); location.hash = '#/profile'; }
 
 document.addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.dataset.qasave && S.qaTab === 'mine') return saveQa(t.dataset.qasave, t.value.trim());
+  if (t.dataset.qaedit) { await call('qa:edit', { id: t.dataset.qaedit, question: t.value }); return; }
   if (t.id === 'autoSwitch') { await call(t.checked ? 'engine:start' : 'engine:stop'); await refresh(); return; }
   if (t.dataset.stageFor) return moveStage(t.dataset.stageFor, t.value);
   if (t.dataset.src) return saveSettingsSoon({ sources: { [t.dataset.src]: t.checked } });
@@ -484,6 +538,8 @@ document.addEventListener('change', async (e) => {
 });
 document.addEventListener('input', (e) => {
   const t = e.target;
+  if (t.id === 'qaq') { S.qaQ = t.value; clearTimeout(saveT.q); saveT.q = setTimeout(() => { render(); const i = $('#qaq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 200); return; }
+  if (t.dataset.qabank) { clearTimeout(saveT[t.dataset.qabank]); saveT[t.dataset.qabank] = setTimeout(async () => { const r = await call('qa:bank', { id: t.dataset.qabank, answer: t.value }); const row = t.closest('.qrow'); if (row) { const filled = !!t.value.trim(); row.classList.toggle('yours', filled); const chipEl = row.querySelector('.chip'); if (chipEl && filled) { chipEl.className = 'chip good'; chipEl.textContent = 'Yours'; } } S.server.counts.pendingQa = r.pending ?? S.server.counts.pendingQa; }, 450); return; }
   const val = t.dataset.num ? (Number.isFinite(parseFloat(t.value)) ? parseFloat(t.value) : 0) : t.value;
   if (t.dataset.p) return saveProfileSoon({ [t.dataset.p]: val });
   if (t.dataset.a) return saveProfileSoon({ answers: { [t.dataset.a]: t.value } });
@@ -494,6 +550,7 @@ document.addEventListener('input', (e) => {
   if (t.dataset.hours) { const h = { ...S.server.settings.activeHours, [t.dataset.hours]: +t.value || 0 }; S.server.settings.activeHours = h; return saveSettingsSoon({ activeHours: h }); }
 });
 document.addEventListener('keydown', async (e) => {
+  if (e.key === 'Enter' && e.target.dataset?.qasave && S.qaTab !== 'mine') { e.preventDefault(); const v = e.target.value.trim(); if (v) await saveQa(e.target.dataset.qasave, v); return; }
   const box = e.target.closest?.('[data-tagbox]');
   if (!box || e.key !== 'Enter') return;
   e.preventDefault();
@@ -514,6 +571,8 @@ document.addEventListener('click', async (e) => {
   render();
 });
 document.addEventListener('submit', async (e) => {
+  const qf = e.target.closest('[data-form="qaadd"]');
+  if (qf) { e.preventDefault(); await call('qa:add', { question: qf.question.value.trim(), answer: qf.answer.value.trim() }); toast('Added ✓'); await refresh(); return; }
   const f = e.target.closest('[data-form="addco"]'); if (!f) return;
   e.preventDefault();
   const r = await call('companies:add', f.url.value.trim());

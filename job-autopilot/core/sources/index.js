@@ -1,6 +1,6 @@
 // Job source adapters. Every adapter returns jobs in one normalised shape:
 // { id, source, ats, token, company, title, location, locations[], remote, department, url, applyUrl, description, postedAt }
-import { getJson, htmlToText, slugName } from '../util.js';
+import { getJson, htmlToText, slugName, cleanLocation } from '../util.js';
 import { detectAts } from '../ats.js';
 
 const BASES = {
@@ -60,14 +60,23 @@ export async function smartrecruiters(token, settings) {
     const j = await getJson(`${base(settings, 'smartrecruiters')}/v1/companies/${encodeURIComponent(token)}/postings?limit=100&offset=${offset}&country=in`);
     for (const x of j.content || []) {
       const l = x.location || {};
-      const loc = l.fullLocation || [l.city, l.region, (l.country || '').toUpperCase()].filter(Boolean).join(', ');
+      const loc = cleanLocation([l.city, l.region, /^in$/i.test(l.country || '') ? 'India' : (l.country || '').toUpperCase()].filter(Boolean).join(', ') || l.fullLocation);
       const url = `https://jobs.smartrecruiters.com/${encodeURIComponent(token)}/${x.id}`;
       out.push({ id: `smartrecruiters:${token}:${x.id}`, source: 'smartrecruiters', ats: 'smartrecruiters', token, company: x.company?.name || slugName(token), title: x.name || '', location: loc, locations: [], remote: l.remote === true,
-        department: x.department?.label || '', url, applyUrl: url, description: [x.function?.label, x.industry?.label, x.typeOfEmployment?.label, x.experienceLevel?.label].filter(Boolean).join(' · '), postedAt: iso(x.releasedDate), manual: true });
+        department: x.department?.label || '', url, applyUrl: url, description: [x.function?.label, x.industry?.label, x.typeOfEmployment?.label, x.experienceLevel?.label].filter(Boolean).join(' · '), postedAt: iso(x.releasedDate) });
     }
     if (!(j.content || []).length || offset + 100 >= (j.totalFound || 0)) break;
   }
   return out;
+}
+
+/** SmartRecruiters lists carry no description – fetch it (and the real apply link) for postings that look relevant. */
+export async function smartrecruitersDetail(job, settings) {
+  const id = String(job.id).split(':').pop();
+  const x = await getJson(`${base(settings, 'smartrecruiters')}/v1/companies/${encodeURIComponent(job.token)}/postings/${encodeURIComponent(id)}`);
+  const sec = x.jobAd?.sections || {};
+  const text = ['companyDescription', 'jobDescription', 'qualifications', 'additionalInformation'].map((k) => (sec[k]?.text ? `${sec[k].title || ''}\n${htmlToText(sec[k].text)}` : '')).filter(Boolean).join('\n\n');
+  return { description: [job.description, text].filter(Boolean).join('\n'), applyUrl: x.applyUrl || job.applyUrl, remote: job.remote || x.location?.remote === true };
 }
 
 export const ATS_SOURCES = { greenhouse, lever, ashby, workable, smartrecruiters };

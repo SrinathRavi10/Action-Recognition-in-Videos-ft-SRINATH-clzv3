@@ -35,8 +35,8 @@ else {
 
   async function loadCore() {
     const url = (f) => pathToFileURL(path.join(ROOT, 'core', f)).href;
-    const [st, en, rs, pt, ll, pf, em, ma, qu, pl] = await Promise.all(['store.js', 'engine.js', 'resume.js', 'pdftext.js', 'llm.js', 'profile.js', 'email.js', 'match.js', 'quality.js', 'pipeline.js'].map((f) => import(url(f))));
-    return { Store: st.Store, Engine: en.Engine, parseResume: rs.parseResume, pdfToText: pt.pdfToText, makeClient: ll.makeClient, answerQuestions: ll.answerQuestions, missingForLive: pf.missingForLive, makeTransport: em.makeTransport, evaluate: ma.evaluate, salaryInfo: qu.salaryInfo, compareSalary: qu.compareSalary, analytics: pl.analytics, appsCsv: pl.appsCsv, interviewIcs: pl.interviewIcs };
+    const [st, en, rs, pt, ll, pf, em, ma, qu, pl, qb, at] = await Promise.all(['store.js', 'engine.js', 'resume.js', 'pdftext.js', 'llm.js', 'profile.js', 'email.js', 'match.js', 'quality.js', 'pipeline.js', 'qbank.js', 'ats.js'].map((f) => import(url(f))));
+    return { Store: st.Store, Engine: en.Engine, parseResume: rs.parseResume, pdfToText: pt.pdfToText, makeClient: ll.makeClient, answerQuestions: ll.answerQuestions, missingForLive: pf.missingForLive, makeTransport: em.makeTransport, evaluate: ma.evaluate, salaryInfo: qu.salaryInfo, compareSalary: qu.compareSalary, analytics: pl.analytics, appsCsv: pl.appsCsv, interviewIcs: pl.interviewIcs, qbank: qb, canAutoApply: at.canAutoApply };
   }
 
   function registerAppProtocol() {
@@ -100,8 +100,8 @@ else {
   }
 
   // ───────── helpers ─────────
-  const publicJob = (j, withDesc = false) => ({ id: j.id, source: j.source, ats: j.ats, company: j.company, title: j.title, location: j.location, remote: j.remote, url: j.url, applyUrl: j.applyUrl, postedAt: j.postedAt, firstSeen: j.firstSeen, status: j.status, salary: core.salaryInfo(j.description || ''), manual: !!(j.manual || ['smartrecruiters', 'workday'].includes(j.ats)), score: j.eval?.score ?? 0, decision: j.eval?.decision, reasons: j.eval?.reasons || [], skipReason: j.eval?.skipReason, matchedSkills: j.eval?.matchedSkills || [], ...(withDesc ? { description: j.description } : {}) });
-  const publicProfile = () => { const p = { ...store.get('profile') }; delete p.resumeText; p.hasResume = !!p.resumePath && fs.existsSync(p.resumePath); p.resumeName = p.resumePath ? path.basename(p.resumePath) : ''; return p; };
+  const publicJob = (j, withDesc = false) => ({ id: j.id, source: j.source, ats: j.ats, company: j.company, title: j.title, location: j.location, remote: j.remote, url: j.url, applyUrl: j.applyUrl, postedAt: j.postedAt, firstSeen: j.firstSeen, status: j.status, salary: core.salaryInfo(j.description || ''), manual: !core.canAutoApply(j, store.get('settings')), score: j.eval?.score ?? 0, decision: j.eval?.decision, reasons: j.eval?.reasons || [], skipReason: j.eval?.skipReason, matchedSkills: j.eval?.matchedSkills || [], ...(withDesc ? { description: j.description } : {}) });
+  const publicProfile = () => { const p = { ...store.get('profile') }; delete p.resumeText; delete p.qa; delete p.bank; p.hasResume = !!p.resumePath && fs.existsSync(p.resumePath); p.resumeName = p.resumePath ? path.basename(p.resumePath) : ''; return p; };
   const publicSettings = () => { const s = JSON.parse(JSON.stringify(store.get('settings'))); s.claude.hasKey = !!s.claude.apiKey; s.claude.apiKey = ''; s.email.hasPass = !!s.email.pass; s.email.pass = ''; s.adzuna.hasKey = !!s.adzuna.appKey; s.adzuna.appKey = ''; s.inbox.hasPass = !!s.inbox.pass; s.inbox.pass = ''; return s; };
   const mergeSettings = (cur, over) => { for (const [k, v] of Object.entries(over)) { if (v && typeof v === 'object' && !Array.isArray(v) && cur[k] && typeof cur[k] === 'object') mergeSettings(cur[k], v); else cur[k] = v; } return cur; };
   const counts = () => {
@@ -110,7 +110,7 @@ else {
     const perDay = {};
     for (const a of apps) if (done(a) || a.status === 'dry_run') { const d = a.at.slice(0, 10); perDay[d] = (perDay[d] || 0) + 1; }
     return { appliedToday: apps.filter((a) => done(a) && a.at.slice(0, 10) === day).length, appliedTotal: apps.filter(done).length, dryRuns: apps.filter((a) => a.status === 'dry_run').length, needsYou: apps.filter((a) => a.status === 'needs_you' && jobs.find((j) => j.id === a.jobId)?.status === 'needs_you').length,
-      matches: jobs.filter((j) => j.eval?.decision === 'apply' && ['new', 'queued', 'dry_run'].includes(j.status)).length, awaiting: jobs.filter((j) => j.status === 'awaiting').length, followUps: engine.followUps().length,
+      matches: jobs.filter((j) => j.eval?.decision === 'apply' && ['new', 'queued', 'dry_run'].includes(j.status)).length, awaiting: jobs.filter((j) => j.status === 'awaiting').length, followUps: engine.followUps().length, pendingQa: core.qbank.pendingCount(store.get('profile')),
       upcoming: apps.filter((a) => a.interviewAt && a.stage === 'interview' && new Date(a.interviewAt) > new Date(Date.now() - 36e5)).length, jobsTotal: jobs.length, companies: store.get('companies').filter((c) => c.enabled).length, perDay };
   };
   const applyLoginItem = () => { try { if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: !!store.get('settings').startWithWindows, args: ['--background'] }); } catch (e) { log('login item failed', e); } };
@@ -150,7 +150,16 @@ else {
     'jobs:list': () => Object.values(store.get('jobs')).filter((j) => j.status !== 'closed' || j.eval?.decision === 'apply').map((j) => publicJob(j)),
     'job:detail': (id) => { const j = store.get('jobs')[id]; return j ? publicJob(j, true) : null; },
     'job:skip': (id) => { engine.reject(id); return true; },
-    'answer:save': ({ match, answer }) => { const p = store.get('profile'); const key = String(match).toLowerCase().trim(); const ex = (p.answers.extra ||= []); const hit = ex.find((x) => String(x.match).toLowerCase() === key); if (hit) hit.answer = answer; else ex.push({ match: key, answer }); store.save('profile'); return { ok: true }; },
+    'answer:save': ({ match, answer }) => { const p = store.get('profile'); core.qbank.upsertQa(p, { question: match, answer, source: 'you' }); store.save('profile'); return { ok: true }; },
+    // ── Answers screen ──
+    'qa:state': () => { const p = store.get('profile'); return { catalog: core.qbank.catalogView(p, store.get('settings')), qa: (p.qa || []).slice().sort((a, b) => ((b.source === 'pending') - (a.source === 'pending')) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))), groups: core.qbank.GROUPS, pending: core.qbank.pendingCount(p) }; },
+    'qa:bank': ({ id, answer }) => { const p = store.get('profile'); const e = core.qbank.entryById(id); if (!e) return { ok: false }; const v = String(answer ?? '').trim(); if (e.store) p.answers[e.store] = v; else { p.bank ||= {}; if (v) p.bank[id] = v; else delete p.bank[id]; } store.save('profile'); if (e.store === 'expectedCtc') engine.reevaluate(); return { ok: true, pending: core.qbank.pendingCount(p) }; },
+    'qa:save': ({ id, answer }) => { const p = store.get('profile'); const q = (p.qa || []).find((x) => x.id === id); if (!q) return { ok: false }; q.answer = String(answer ?? '').trim(); q.source = q.answer ? 'you' : (q.source === 'you' ? 'pending' : q.source); q.updatedAt = new Date().toISOString(); store.save('profile'); return { ok: true, pending: core.qbank.pendingCount(p) }; },
+    'qa:add': ({ question, answer, kind }) => { const p = store.get('profile'); const q = core.qbank.upsertQa(p, { question, answer: String(answer || '').trim(), kind: kind || 'text', source: 'you' }); store.save('profile'); return { ok: !!q, pending: core.qbank.pendingCount(p) }; },
+    'qa:edit': ({ id, question }) => { const p = store.get('profile'); const q = (p.qa || []).find((x) => x.id === id); if (q && question) { q.question = String(question).trim(); store.save('profile'); } return { ok: !!q }; },
+    'qa:delete': (id) => { const p = store.get('profile'); p.qa = (p.qa || []).filter((x) => x.id !== id); store.save('profile'); return { ok: true, pending: core.qbank.pendingCount(p) }; },
+    'qa:retry': async () => ({ ok: true, count: await engine.retryWaiting() }),
+    'job:watch': (id) => { engine.watch(id).catch((e) => engine.log('error', e.message)); return { ok: true }; },
     'job:feedback': ({ id, verdict }) => { engine.feedback(id, verdict); return true; },
     'job:approve': (id) => engine.approve(id),
     'job:manualApplied': (id) => ({ ok: !!engine.recordManual(id) }),
@@ -230,7 +239,7 @@ else {
       dataDir = path.join(app.getPath('userData'), 'data');
       store = new core.Store(dataDir, { codec: safeStorage.isEncryptionAvailable() ? { encrypt: (v) => safeStorage.encryptString(v).toString('base64'), decrypt: (v) => safeStorage.decryptString(Buffer.from(v, 'base64')) } : null });
       if (process.env.JA_TEST_BASE) {   // test hook: point the app at local mock job boards (never set in normal use)
-        try { store.get('settings').sourceBase = JSON.parse(process.env.JA_TEST_BASE); Object.assign(store.get('settings').sources, { remoteok: false, remotive: false, adzuna: false, workable: false }); if (!store.get('companies').length) store.set('companies', ['greenhouse', 'lever', 'ashby'].map((ats) => ({ ats, token: 'mockco', enabled: true }))); } catch (e) { log('JA_TEST_BASE ignored', e); }
+        try { store.get('settings').sourceBase = JSON.parse(process.env.JA_TEST_BASE); Object.assign(store.get('settings').sources, { remoteok: false, remotive: false, adzuna: false, workable: false }); if (!store.get('companies').length) store.set('companies', ['greenhouse', 'lever', 'ashby', 'smartrecruiters'].map((ats) => ({ ats, token: 'mockco', enabled: true }))); } catch (e) { log('JA_TEST_BASE ignored', e); }
       }
       const { makeDriver } = require('./electronDriver.cjs');
       engine = new core.Engine({

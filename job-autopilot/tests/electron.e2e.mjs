@@ -28,7 +28,7 @@ try {
   const shot = (n) => (SHOTS ? win.screenshot({ path: path.join(SHOTS, `${n}.png`) }) : null);
 
   const st = await api('state');
-  assert.equal(st.running, false); assert.equal(typeof st.version, 'string'); assert.ok(st.settings.inbox, 'new settings present');
+  assert.equal(st.running, false); assert.match(st.version, /^1\.2/); assert.ok(st.settings.inbox, 'new settings present');
   console.log('✓ app started, version', st.version, '· keys encrypted:', st.encrypted);
 
   // profile + settings through the real IPC API
@@ -50,17 +50,46 @@ try {
   const apps = await waitFor(async () => { const a = await api('apps:list'); return a.some((x) => x.status === 'applied') && a; }, 20000, 'app recorded');
   console.log('✓ approved job submitted:', apps.find((x) => x.status === 'applied').title);
 
+  // the SmartRecruiters mock job (multi-step, shadow DOM, custom widgets) goes through the same approval flow
+  const sr = (await api('jobs:list')).find((j) => j.ats === 'smartrecruiters');
+  assert.ok(sr, 'smartrecruiters job found'); assert.equal(sr.status, 'awaiting');
+  await api('profile:save', { summary: 'ML engineer with a year of experience building NLP and churn models.' });
+  const before = mock.submissions.length;
+  const ap = await api('job:approve', sr.id);
+  assert.equal(ap.app.status, 'applied', JSON.stringify(ap.app));
+  const sub = mock.submissions.at(-1); assert.equal(sub.kind, 'smartrecruiters'); assert.equal(sub.fields.firstName, 'Jane'); assert.equal(sub.files.resume.filename, 'Jane_Role_Resume.pdf');
+  assert.equal(mock.submissions.length, before + 1);
+  console.log('✓ SmartRecruiters multi-step shadow-DOM form submitted from Electron (file upload via CDP handle)');
+
   // reject another → skipped + learned
   const left = await win.locator('[data-act="skipjob"]').count();
   if (left) { await win.locator('[data-act="skipjob"]').first().click(); await waitFor(async () => (await api('state')).counts.awaiting < (left), 8000, 'reject'); console.log('✓ rejected one'); }
 
+  // "Watch it fill": a visible application window opens, the form is filled but NOT submitted, and you can close it
+  const gh = (await api('jobs:list')).find((j) => j.ats === 'lever' && ['awaiting', 'new', 'queued', 'needs_you', 'dry_run'].includes(j.status));
+  if (gh) {
+    const subs = mock.submissions.length;
+    await api('job:watch', gh.id);
+    await waitFor(async () => (await api('log:list')).some((l) => /everything is filled|Could not|needs/i.test(l.msg) && /Machine Learning Engineer|AI Engineer/.test(l.msg)), 30000, 'watch filled');
+    const watchWin = app.windows().find((w) => w !== win);
+    assert.ok(watchWin, 'a second, visible window is open for watching');
+    assert.equal(mock.submissions.length, subs, 'watching never submits by itself');
+    await watchWin.close().catch(() => {});
+    console.log('✓ watch mode opened a visible window, filled the form, did not submit');
+  }
+
   // pipeline: stage change, follow-up (followUpDays 0), insights, CSV builder
   const applied = (await api('apps:list')).find((x) => x.status === 'applied');
   await api('app:stage', { id: applied.id, stage: 'interview', interviewAt: '2026-11-03T10:30:00.000Z' });
-  const ins = await api('insights'); assert.equal(ins.totals.applied, 1); assert.equal(ins.totals.interviews, 1);
+  const ins = await api('insights'); assert.ok(ins.totals.applied >= 2); assert.equal(ins.totals.interviews, 1);
   await win.evaluate(() => { location.hash = '#/pipeline'; }); await win.waitForSelector('.pcard'); await shot('03-pipeline');
   assert.equal(await win.locator('.pcol[data-stage="interview"] .pcard').count(), 1);
   await win.evaluate(() => { location.hash = '#/insights'; }); await win.waitForSelector('.kpis'); await shot('04-insights');
+  // answer bank API
+  const qa = await api('qa:state'); assert.ok(qa.catalog.length >= 100); assert.ok(qa.groups.includes('Notice & pay'));
+  await api('qa:bank', { id: 'postal', answer: '411001' }); await api('qa:add', { question: 'Do you own a car?', answer: 'No' });
+  const qa2 = await api('qa:state'); assert.equal(qa2.catalog.find((c) => c.id === 'postal').yours, '411001'); assert.ok(qa2.qa.some((q) => /own a car/.test(q.question)));
+  await win.evaluate(() => { location.hash = '#/answers'; }); await win.waitForSelector('.qrow'); await shot('06-answers');
   const prep = await api('app:prep', applied.id); assert.match(prep.text, /Likely questions/); assert.equal(prep.source, 'template');
   const draft = await api('app:followup:draft', applied.id); assert.match(draft.subject, /Following up/);
   const ib = await api('inbox:test'); assert.equal(ib.ok, false); assert.match(ib.error, /not set up/);

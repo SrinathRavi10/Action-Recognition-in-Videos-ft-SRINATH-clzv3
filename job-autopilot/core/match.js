@@ -22,7 +22,12 @@ export function locationInfo(job, settings) {
 const ROLE_STRONG = ['machine learning', 'ml engineer', 'ai engineer', 'ai/ml', 'aiml', 'ai ml', 'data scientist', 'generative ai', 'gen ai', 'genai', 'llm', 'nlp', 'computer vision', 'deep learning', 'applied scientist', 'research engineer', 'artificial intelligence', 'mlops', 'prompt engineer', 'agentic'];
 const ROLE_MEDIUM = ['data analyst', 'data engineer', 'automation engineer', 'rpa', 'python developer', 'python engineer', 'analytics engineer', 'business intelligence', 'bi developer', 'software engineer - ai', 'software engineer (ai', 'ai developer', 'ml developer', 'data science'];
 const ROLE_WEAK = ['software engineer', 'software developer', 'backend engineer', 'sde', 'full stack', 'analyst'];
-const OFF_TOPIC = ['sales', 'marketing', 'recruit', 'talent', 'account executive', 'customer success', 'support specialist', 'finance', 'accountant', 'legal', 'counsel', 'designer', 'ux ', 'hr ', 'human resources', 'operations manager', 'nurse', 'driver', 'warehouse', 'content writer', 'copywriter', 'seo', 'social media', 'business development', 'partnerships', 'procurement', 'payroll'];
+const OFF_TOPIC = ['mechanical', 'maintenance', 'civil', 'electrical', 'electronics', 'hvac', 'plant', 'manufacturing', 'welding', 'chemical', 'technician', 'inspection', 'supervisor', 'operator', 'mechanic', 'fitter', 'site engineer', 'field engineer', 'service engineer', 'sales', 'marketing', 'recruit', 'talent', 'account executive', 'customer success', 'support specialist', 'finance', 'accountant', 'legal', 'counsel', 'designer', 'ux ', 'hr ', 'human resources', 'operations manager', 'nurse', 'driver', 'warehouse', 'content writer', 'copywriter', 'seo', 'social media', 'business development', 'partnerships', 'procurement', 'payroll'];
+
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Whole-word / whole-phrase test on an already normalised title ("rbai engineer" does NOT contain "ai engineer"). */
+const hasPhrase = (title, phrase) => { const p = norm(phrase); return !!p && new RegExp(`(^| )${esc(p)}( |$)`).test(title); };
+const SENIOR_LEVEL = /\b(?:sde|swe|sse|software engineer|engineer|developer|scientist|analyst)[ -]?(?:iii|iv|v|vi|3|4|5|6)\b|\blevel[ -]?(?:3|4|5|iii|iv)\b|\bl[4-7]\b/;
 
 /** Lowest number of years of experience a posting asks for (null if it does not say). */
 export function requiredYears(text) {
@@ -52,6 +57,7 @@ export function evaluate(job, profile, settings, learn = null) {
   const skip = (why) => ({ score: 0, decision: 'skip', reasons: [why], skipReason: why, matchedSkills: [] });
 
   // 1) hard exclusions
+  if (SENIOR_LEVEL.test(title)) return skip('Senior level (III / IV and above)');
   const bad = (settings.excludeTitleWords || []).find((w) => ` ${title} `.includes(` ${norm(w)}`) || title.startsWith(norm(w)));
   if (bad) return skip(`Seniority/level excluded (“${bad.trim()}”)`);
   if (/\bintern(ship)?\b|\btrainee\b/.test(title) && !settings.includeInternships) return skip('Internship (turned off in settings)');
@@ -63,9 +69,9 @@ export function evaluate(job, profile, settings, learn = null) {
   // 2) role relevance
   let role = 0, roleWhy = '';
   const custom = (settings.roles || []).map(norm);
-  if (ROLE_STRONG.some((w) => title.includes(w)) || custom.some((w) => w && title.includes(w) && ROLE_STRONG.concat(ROLE_MEDIUM).some((x) => x.includes(w) || w.includes(x)))) { role = 42; roleWhy = 'Title matches your target AI/ML roles'; }
-  else if (ROLE_MEDIUM.some((w) => title.includes(w)) || custom.some((w) => w && title.includes(w))) { role = 28; roleWhy = 'Title is a related data/automation role'; }
-  else if (ROLE_WEAK.some((w) => title.includes(w))) { role = 10; roleWhy = 'Generic engineering title'; }
+  if (ROLE_STRONG.some((w) => hasPhrase(title, w)) || custom.some((w) => w && hasPhrase(title, w) && ROLE_STRONG.concat(ROLE_MEDIUM).some((x) => norm(x).includes(w) || w.includes(norm(x))))) { role = 42; roleWhy = 'Title matches your target AI/ML roles'; }
+  else if (ROLE_MEDIUM.some((w) => hasPhrase(title, w)) || custom.some((w) => w && hasPhrase(title, w))) { role = 28; roleWhy = 'Title is a related data/automation role'; }
+  else if (ROLE_WEAK.some((w) => hasPhrase(title, w))) { role = 10; roleWhy = 'Generic engineering title'; }
   const descSkills = skillsIn(`${job.title} ${desc}`);
   const mine = new Set(profile.skills || []);
   const matched = descSkills.filter((s) => mine.has(s));

@@ -145,7 +145,7 @@ test('smartrecruiters: listing adapter + careers URL recognised (apply is manual
   globalThis.fetch = async (u) => { assert.match(String(u), /api\.smartrecruiters\.com\/v1\/companies\/Acme\/postings/); return new Response(JSON.stringify({ totalFound: 1, content: [{ id: '123', name: 'Machine Learning Engineer', releasedDate: '2026-10-01T00:00:00Z', company: { name: 'Acme' }, location: { city: 'Pune', country: 'in', fullLocation: 'Pune, India' }, department: { label: 'AI' } }] }), { headers: { 'content-type': 'application/json' } }); };
   try {
     const jobs = await smartrecruiters('Acme', {});
-    assert.equal(jobs.length, 1); assert.equal(jobs[0].manual, true); assert.equal(jobs[0].url, 'https://jobs.smartrecruiters.com/Acme/123'); assert.equal(jobs[0].location, 'Pune, India');
+    assert.equal(jobs.length, 1); assert.equal(jobs[0].url, 'https://jobs.smartrecruiters.com/Acme/123'); assert.equal(jobs[0].location, 'Pune, India');
   } finally { globalThis.fetch = real; }
   assert.deepEqual(companyFromUrl('https://jobs.smartrecruiters.com/Acme/743999'), { ats: 'smartrecruiters', token: 'Acme', name: 'Acme', custom: true, enabled: true, checkedAt: null });
 });
@@ -182,7 +182,7 @@ test('engine: approval is not used for dry runs', async () => {
 });
 
 test('engine: sites we cannot fill are never attempted; user gets one heads-up and can record the application', async () => {
-  const { e } = engineWith([J('s', { ats: 'smartrecruiters', manual: true, company: 'Visa' })]);
+  const { e } = engineWith([J('s', { ats: 'workday', company: 'Visa' })]);
   const heard = []; e.on('manual', (j) => heard.push(j.id));
   e.applyTo = async () => { throw new Error('must not be attempted'); };
   assert.equal((await e.processQueue()).done, 0);
@@ -230,4 +230,52 @@ test('engine: a job you skipped stays skipped when the profile or settings chang
   e.setJobStatus('a', 'skipped'); e.reevaluate(); e.reevaluate();
   assert.equal(e.jobs.a.status, 'skipped');
   e.setJobStatus('a', 'new'); assert.equal(e.jobs.a.userSkipped, undefined);
+});
+
+test('matching: whole-word roles — "RBAI Engineer" is not an AI role; senior levels and plant roles are skipped', () => {
+  const p = { ...emptyProfile(), skills: ['Python', 'PyTorch', 'NLP'], experienceYears: 1 };
+  const s = { ...DEFAULT_SETTINGS(), locations: ['Bengaluru'] };
+  const ev = (title, o = {}) => evaluate({ title, company: 'X', location: 'Bengaluru, India', description: 'Python PyTorch NLP. 0-2 years experience.', postedAt: new Date().toISOString(), ...o }, p, s);
+  assert.equal(ev('IN_RBAI_Engineer/Maintenance Engineer').decision, 'skip');
+  assert.equal(ev('IN_RBAI_Engineer_FA Testing & Inspection Maintenance').decision, 'skip');
+  assert.equal(ev('Mechanical Maintenance Engineer – AI plant').decision, 'skip');
+  assert.match(ev('SDE IV (ML Engineering)').skipReason, /Senior level/);
+  assert.match(ev('Machine Learning Engineer III').skipReason, /Senior level/);
+  assert.match(ev('Software Engineer 4 - AI').skipReason, /Senior level/);
+  for (const t of ['AI Engineer', 'AI/ML Engineer', 'Applied AI Engineer – Risk', 'NLP Engineer', 'Machine Learning Engineer II']) assert.equal(ev(t).decision, 'apply', t);
+});
+
+test('locations are tidied ("coimbatore, , India" → "Coimbatore, India")', async () => {
+  const { cleanLocation } = await import('../core/util.js');
+  assert.equal(cleanLocation('coimbatore, , India'), 'Coimbatore, India');
+  assert.equal(cleanLocation('bangalore, , india'), 'Bangalore, India');
+  assert.equal(cleanLocation('Bengaluru, KA, India'), 'Bengaluru, KA, India');
+  assert.equal(cleanLocation(' , Pune,'), 'Pune');
+});
+
+test('smartrecruiters: descriptions are fetched for relevant postings and used for scoring', async () => {
+  const { smartrecruitersDetail } = await import('../core/sources/index.js');
+  const real = globalThis.fetch;
+  globalThis.fetch = async (u) => new Response(JSON.stringify({ applyUrl: 'https://jobs.smartrecruiters.com/oneclick-ui/company/Acme/publication/abc', jobAd: { sections: { jobDescription: { title: 'Job Description', text: '<p>Python, PyTorch, NLP. 0-2 years of experience.</p>' }, qualifications: { title: 'Qualifications', text: '<ul><li>B.Tech</li></ul>' } } } }), { headers: { 'content-type': 'application/json' } });
+  try {
+    const d = await smartrecruitersDetail({ id: 'smartrecruiters:Acme:123', token: 'Acme', description: 'AI · Entry Level', applyUrl: 'u' }, {});
+    assert.match(d.description, /PyTorch/); assert.match(d.applyUrl, /oneclick-ui/);
+  } finally { globalThis.fetch = real; }
+  const { e } = engineWith([J('sr', { ats: 'smartrecruiters', token: 'Acme', description: '', detailed: false })]);
+  globalThis.fetch = async () => new Response(JSON.stringify({ jobAd: { sections: { jobDescription: { text: '<p>Python PyTorch NLP deep learning, 0-2 years.</p>' } } } }), { headers: { 'content-type': 'application/json' } });
+  try { await e.enrichDetails(); } finally { globalThis.fetch = real; }
+  assert.equal(e.jobs.sr.detailed, true); assert.match(e.jobs.sr.description, /PyTorch/); assert.ok(e.jobs.sr.eval.matchedSkills.includes('PyTorch'));
+});
+
+test('which sites the autopilot attempts: supported + experimental + other employer pages; never bot-hostile job boards or account-wall systems', async () => {
+  const { canAutoApply, isForbiddenSite } = await import('../core/ats.js');
+  const on = {}, off = { tryExperimental: false };
+  for (const ats of ['greenhouse', 'lever', 'ashby', 'workable']) assert.equal(canAutoApply({ ats }, off), true);
+  assert.equal(canAutoApply({ ats: 'smartrecruiters' }, on), true); assert.equal(canAutoApply({ ats: 'smartrecruiters' }, off), false);
+  assert.equal(canAutoApply({ ats: 'workday' }, on), false);
+  assert.equal(canAutoApply({ ats: null, resolvedUrl: 'https://careers.acme.in/jobs/12' }, on), true);
+  assert.equal(canAutoApply({ ats: null, resolvedUrl: 'https://www.naukri.com/job-listings-x' }, on), false);
+  assert.equal(canAutoApply({ ats: null, applyUrl: 'https://in.linkedin.com/jobs/view/1' }, on), false);
+  assert.equal(canAutoApply({ ats: null, applyUrl: 'https://www.indeed.com/viewjob?jk=1' }, on), false);
+  assert.equal(isForbiddenSite('https://in.indeed.com/x'), true); assert.equal(isForbiddenSite('https://acme.com/linkedin'), false);
 });

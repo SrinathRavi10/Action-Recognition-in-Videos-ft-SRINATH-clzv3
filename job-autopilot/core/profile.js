@@ -20,6 +20,8 @@ export const DEFAULT_SETTINGS = () => ({
   approval: false,             // live mode: ask me before each application (queue them under "Approvals")
   maxAgeDays: 45,              // ignore postings older than this (usually stale / ghost listings)
   followUpDays: 7,             // suggest a follow-up if nobody has replied after this many days
+  tryExperimental: true,       // also try sites the app has never been tested on (SmartRecruiters, other employer pages)
+  showBrowser: false,          // show the application window while it fills forms (so you can watch)
   notifyManual: true,          // tell me about good matches on sites the app cannot fill itself
   delaySeconds: [25, 70],      // pause between applications (looks human, avoids hammering sites)
   activeHours: { from: 0, to: 24 },
@@ -49,6 +51,9 @@ export const emptyProfile = () => ({
   firstName: '', lastName: '', fullName: '', email: '', phone: '', location: '', city: '', country: 'India', linkedin: '', github: '', website: '', headline: '',
   skills: [], experienceYears: 0, experienceMonths: 0, education: { degree: '', gradYear: null, cgpa: '' }, currentCompany: '', currentTitle: '', summary: '',
   resumePath: '', resumeText: '', answers: DEFAULT_ANSWERS(),
+  bank: {},                    // answers typed on the Answers screen, by question-type id
+  qa: [],                      // your own / learned / pending questions (see core/qbank.js)
+  skillYears: {},              // optional: { Python: 2, SQL: 1 } for "years of experience with X" questions
 });
 
 /** What the user still has to fill in before live applying makes sense. */

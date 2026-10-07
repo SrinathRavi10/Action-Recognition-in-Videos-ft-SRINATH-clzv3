@@ -30,11 +30,13 @@ async function makeDriver({ visible = false } = {}) {
     eval: (code) => wc.executeJavaScript(code, true),
     async setFiles(selector, files) {
       if (!wc.debugger.isAttached()) wc.debugger.attach('1.3');
-      const { root } = await wc.debugger.sendCommand('DOM.getDocument', { depth: 0 });
-      const { nodeId } = await wc.debugger.sendCommand('DOM.querySelector', { nodeId: root.nodeId, selector });
-      if (!nodeId) throw new Error('file input not found');
-      await wc.debugger.sendCommand('DOM.setFileInputFiles', { nodeId, files });
-      await wc.executeJavaScript(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(el){el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}})()`);
+      // Get a handle to the marked <input type=file> through the page (this also finds inputs inside shadow DOM, which
+      // DOM.querySelector cannot see), then attach the files to that handle.
+      const tag = (/data-ja-upload="([^"]+)"/.exec(selector) || [])[1];
+      const { result } = await wc.debugger.sendCommand('Runtime.evaluate', { expression: tag ? `window.__JA && __JA.markedElement(${JSON.stringify(tag)})` : `document.querySelector(${JSON.stringify(selector)})`, returnByValue: false });
+      if (!result || !result.objectId) throw new Error('file input not found');
+      await wc.debugger.sendCommand('DOM.setFileInputFiles', { objectId: result.objectId, files });
+      await wc.debugger.sendCommand('Runtime.callFunctionOn', { objectId: result.objectId, functionDeclaration: "function(){ this.dispatchEvent(new Event('input',{bubbles:true,composed:true})); this.dispatchEvent(new Event('change',{bubbles:true,composed:true})); }" });
     },
     screenshot: async () => (await wc.capturePage()).toPNG(),
     url: async () => wc.getURL(),

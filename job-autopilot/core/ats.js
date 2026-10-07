@@ -20,5 +20,21 @@ export function detectAts(url) {
 
 /** Which systems the form filler is able to submit on. */
 export const SUPPORTED_ATS = ['greenhouse', 'lever', 'ashby', 'workable'];
-/** Systems we can read listings from (or recognise) but cannot fill: the app finds the job, you apply with one click. */
-export const MANUAL_ATS = ['smartrecruiters', 'workday'];
+/** Filled by the same universal form filler, but never seen on a real site by the developer: on by default, can be switched off in Settings. */
+export const EXPERIMENTAL_ATS = ['smartrecruiters'];
+/** Systems that need an account per employer (or are otherwise not automatable): the app finds the job, you apply with one click. */
+export const MANUAL_ATS = ['workday'];
+/** Job sites whose rules forbid bots and ban accounts: never automated, only opened for you. */
+const FORBIDDEN_HOSTS = /(^|\.)(linkedin|naukri|indeed|glassdoor|foundit|monsterindia|shine|timesjobs|apna|instahyre|hirist|wellfound|angel)\.(com|co\.in|co)$/i;
+export const isForbiddenSite = (url) => { try { return FORBIDDEN_HOSTS.test(new URL(url).hostname); } catch { return false; } };
+
+/** Can the autopilot try this job by itself? */
+export function canAutoApply(job, settings = {}) {
+  if (!job) return false;
+  if (SUPPORTED_ATS.includes(job.ats)) return true;
+  if (MANUAL_ATS.includes(job.ats) || job.manual) return false;
+  if (settings.tryExperimental === false) return false;
+  if (EXPERIMENTAL_ATS.includes(job.ats)) return true;
+  // any other employer careers page (found by following an aggregator link): try the universal filler, unless it is a bot-hostile job board
+  return !job.ats && !!(job.resolvedUrl || job.applyUrl) && !isForbiddenSite(job.resolvedUrl || job.applyUrl);
+}
